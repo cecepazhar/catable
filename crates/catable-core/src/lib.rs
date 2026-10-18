@@ -1,0 +1,22 @@
+//! CATable core — encrypted connection vault, SQL guardrails & driver registry.
+//!
+//! Design notes (PRD §3.4 & §4):
+//! - Credentials & SSH keys live in a local SQLCipher database; plaintext
+//!   secrets are zeroized out of memory after use.
+//! - Every query (user-authored, AI-generated, or inline edit) passes through
+//!   the guardrail engine before reaching a live driver.
+//! - The driver registry exposes a capability matrix so the UI can disable
+//!   unsupported features per backend instead of failing at runtime.
+
+mod connection;
+mod driver;
+mod error;
+mod guard;
+mod paths;
+mod vault;
+
+pub use connection::{ConnectionConfig, DriverKind, Environment};
+pub use driver::DriverRegistry;
+pub use error::CataleError;
+pub use guard::{GuardVerdict, GuardrailEngine, QueryRisk};
+pub use vault::Vault;

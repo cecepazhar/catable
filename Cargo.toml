@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/catable-core",
+    "crates/catable-app",
+]
+
+[workspace.package]
+version = "0.1.1"
+edition = "2024"
+authors = ["Cecep Saeful Azhar Hidayat <cecep.azhtech@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/cecepazhar/catable"
+
+[workspace.dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "5"
+chrono = "0.4"
+uuid = { version = "1.16", features = ["v4", "v7"] }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "net"] }
+ureq = { version = "3", features = ["json"] }
+parking_lot = "0.12"
+argon2 = "0.5"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+panic = "unwind"

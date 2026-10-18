@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CATable",
+  "version": "0.1.1",
+  "identifier": "com.fathforce.catable",
+  "build": {
+    "frontendDist": "../../frontend/build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "CATable",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "maximized": false,
+        "decorations": false,
+        "additionalBrowserArgs": "--renderer-process-limit=1 --disable-features=Translate,OptimizationHints,MediaRouter --disable-gpu-shader-disk-cache"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon-32.png",
+      "icons/icon-128.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

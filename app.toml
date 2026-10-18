@@ -1,0 +1,64 @@
+[app]
+name = "CATable"
+slug = "catable"
+bundle_id = "com.fathforce.catable"
+version = "0.1.1"
+accent_color = "blue"
+error_prefix = "CATABLE"
+description = "Modern, Lightweight, Native Multi-Driver Database Studio & AI-Powered SQL Client"
+brand = "CATable"
+
+[window]
+title = "CATable"
+width = 1280
+height = 800
+min_width = 960
+min_height = 600
+
+[modules]
+vault_enabled = true
+ai_assistant_enabled = true
+erd_viewer_enabled = true
+pro_licensing_enabled = true
+
+[[menus]]
+key = "connections"
+label = "Connections"
+href = "/"
+icon = "plug"
+description = "Database connection profiles & vault"
+
+[[menus]]
+key = "sql-studio"
+label = "SQL Studio"
+href = "/sql-studio"
+icon = "terminal-square"
+description = "Multi-tab SQL query editor & execution runner"
+
+[[menus]]
+key = "table-browser"
+label = "Table Browser"
+href = "/table-browser"
+icon = "table"
+description = "Virtualized table schema & live data grid"
+
+[[menus]]
+key = "schema-erd"
+label = "Schema ERD"
+href = "/schema-erd"
+icon = "network"
+description = "Interactive database entity relationship diagrams"
+
+[[menus]]
+key = "ai-copilot"
+label = "AI Copilot"
+href = "/ai-copilot"
+icon = "sparkles"
+description = "Schema-aware DBA copilot, NL-to-SQL & query optimizer"
+
+[[menus]]
+key = "settings"
+label = "Settings"
+href = "/settings"
+icon = "settings"
+description = "Application, security & driver preferences"
