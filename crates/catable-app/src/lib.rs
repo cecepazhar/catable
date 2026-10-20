@@ -14,6 +14,9 @@ pub fn run() {
             commands::save_connection,
             commands::delete_connection,
             commands::evaluate_query_safety,
+            commands::test_database_connection,
+            commands::list_database_tables,
+            commands::execute_database_query,
             commands::get_app_version
         ]);
 

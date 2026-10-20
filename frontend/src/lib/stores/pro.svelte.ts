@@ -1,4 +1,4 @@
-// CATerm Pro state for the UI: who is signed in, what this device is entitled to, and whether
+// CATable Pro state for the UI: who is signed in, what this device is entitled to, and whether
 // the Pro server is reachable. Entitlement comes from the signed token checked offline by the
 // backend, so being offline never downgrades a paying user (within the 14-day grace).
 import {

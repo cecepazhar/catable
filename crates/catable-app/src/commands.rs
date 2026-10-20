@@ -1,4 +1,7 @@
-use catable_core::{ConnectionConfig, DriverKind, GuardVerdict, GuardrailEngine, Vault};
+use catable_core::{
+    ConnectionConfig, ConnectionTestResult, DriverKind, GuardVerdict, GuardrailEngine, QueryExecutor,
+    QueryResult, TableInfo, Vault,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -68,6 +71,21 @@ pub fn evaluate_query_safety(
         read_only: false,
     });
     Ok(GuardrailEngine::evaluate(&sql, &conn))
+}
+
+#[tauri::command]
+pub fn test_database_connection(config: ConnectionConfig) -> Result<ConnectionTestResult, String> {
+    Ok(QueryExecutor::test_connection(&config))
+}
+
+#[tauri::command]
+pub fn list_database_tables(config: ConnectionConfig) -> Result<Vec<TableInfo>, String> {
+    QueryExecutor::list_tables(&config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn execute_database_query(config: ConnectionConfig, sql: String) -> Result<QueryResult, String> {
+    Ok(QueryExecutor::execute_query(&config, &sql))
 }
 
 #[tauri::command]

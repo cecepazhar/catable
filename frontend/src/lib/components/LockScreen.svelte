@@ -30,8 +30,8 @@
   // Security Lockout Constants & State (5 wrong attempts -> 5-minute lockout)
   const MAX_FAILED_ATTEMPTS = 5;
   const LOCKOUT_DURATION_MS = 5 * 60 * 1000;
-  const STORAGE_KEY_ATTEMPTS = 'caterm_lock_failed_attempts';
-  const STORAGE_KEY_LOCKOUT_UNTIL = 'caterm_lock_lockout_until';
+  const STORAGE_KEY_ATTEMPTS = 'catable_lock_failed_attempts';
+  const STORAGE_KEY_LOCKOUT_UNTIL = 'catable_lock_lockout_until';
 
   let failedAttempts = $state(0);
   let lockoutRemainingSeconds = $state(0);
@@ -365,13 +365,13 @@
     class="hidden lg:flex w-2/3 flex-col justify-between p-12 lg:p-16 xl:p-20 bg-white dark:bg-neutral-950 border-r border-neutral-200 dark:border-neutral-800/60 relative overflow-hidden shrink-0"
     onmousedown={startDragging}
   >
-    <!-- Sky Blue Grid Flow Animation to CATerm Logo -->
+    <!-- Sky Blue Grid Flow Animation to CATable Logo -->
     <GridFlowBackground targetX={64} targetY={64} count={5} />
 
     <div class="relative z-10 flex items-center gap-3">
       <Logo size={40} mode="brand" />
       <div>
-        <h1 class="text-xl font-bold tracking-wider text-neutral-900 dark:text-white">CATerm <span class="text-xs px-2 py-0.5 rounded bg-sky-500/10 dark:bg-sky-500/20 text-sky-700 dark:text-sky-400 border border-sky-500/30">v{APP_VERSION}</span></h1>
+        <h1 class="text-xl font-bold tracking-wider text-neutral-900 dark:text-white">CATable <span class="text-xs px-2 py-0.5 rounded bg-sky-500/10 dark:bg-sky-500/20 text-sky-700 dark:text-sky-400 border border-sky-500/30">v{APP_VERSION}</span></h1>
         <p class="text-xs text-neutral-500 dark:text-neutral-400">{t('lock.tagline')}</p>
       </div>
     </div>
@@ -503,7 +503,7 @@
                 type="text"
                 bind:value={setupName}
                 maxlength="48"
-                placeholder="CATerm User"
+                placeholder="CATable User"
                 class="w-full px-4 py-3 bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-800 rounded-lg text-neutral-900 dark:text-white placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-sky-500 transition-colors"
               />
             </div>

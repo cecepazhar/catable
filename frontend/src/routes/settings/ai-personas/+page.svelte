@@ -51,7 +51,7 @@
     editingId = null;
     formTitle = '';
     formDesc = '';
-    formPrompt = 'You are CATerm AI Ops Copilot, an elite Linux/DevOps Systems Architect.';
+    formPrompt = 'You are CATable AI Ops Copilot, an elite Linux/DevOps Systems Architect.';
     formRules = [
       'Be concise, direct, and terminal-first.',
       'Always provide copy-pasteable bash/zsh commands.',

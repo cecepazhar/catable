@@ -31,7 +31,7 @@
   const SUBCARD = 'border border-neutral-200 dark:border-neutral-800 rounded-lg p-5 bg-neutral-50 dark:bg-neutral-950';
   const MUTED = 'text-neutral-500 dark:text-neutral-400';
 
-  // ---- CATerm Pro account (Subscription tab) ----------------------------------------------
+  // ---- CATable Pro account (Subscription tab) ----------------------------------------------
   const pro = getPro();
   let showProLogin = $state(false);
   let proDevices = $state<ProDevice[] | null>(null);
@@ -190,7 +190,7 @@
   const requestedTab = page.url.searchParams.get('tab') ?? '';
   let activeTab = $state<SettingsTab>((TABS as readonly string[]).includes(requestedTab) ? (requestedTab as SettingsTab) : 'profile');
 
-  // Subscription only makes sense once the user has a CATerm account (Cloud): a purely local
+  // Subscription only makes sense once the user has a CATable account (Cloud): a purely local
   // vault has nothing to subscribe to. Hidden until sign-in, shown for both free-cloud and Pro.
   const visibleTabs = $derived(TABS.filter((tab) => tab !== 'subscription' || pro.status?.signedIn));
   $effect(() => {
@@ -228,7 +228,7 @@
 
   onMount(() => {
     try {
-      const stored = localStorage.getItem('caterm_max_audit_records');
+      const stored = localStorage.getItem('catable_max_audit_records');
       if (stored) maxAuditRecords = parseInt(stored, 10) || 1000;
     } catch {}
 		getPerformancePrefs()
@@ -291,7 +291,7 @@
   function handleSaveAuditSettings(e: Event) {
     e.preventDefault();
     try {
-      localStorage.setItem('caterm_max_audit_records', maxAuditRecords.toString());
+      localStorage.setItem('catable_max_audit_records', maxAuditRecords.toString());
       showToast(t('settings.audit.saved', { count: maxAuditRecords }), 'success');
     } catch {
       showToast(t('settings.audit.saveFailed'), 'error');
@@ -322,7 +322,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `caterm-backup-${new Date().toISOString().split('T')[0]}.catb`;
+      a.download = `catable-backup-${new Date().toISOString().split('T')[0]}.catb`;
       a.click();
       URL.revokeObjectURL(url);
 
@@ -542,7 +542,7 @@
         <p class="{MUTED} text-sm mt-1">{t('settings.subscription.subtitle')}</p>
       </div>
 
-      <!-- CATerm Pro account on this device -->
+      <!-- CATable Pro account on this device -->
       <div class="{SUBCARD} space-y-3">
         {#if !pro.status?.signedIn}
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -620,7 +620,7 @@
                 </span>
               </div>
               <h3 class="text-xl font-bold text-neutral-900 dark:text-white mt-1">
-                {pro.status?.license?.plan?.toUpperCase() === 'LIFETIME' ? 'CATerm Pro — Founder Lifetime' : 'CATerm Pro Edition'}
+                {pro.status?.license?.plan?.toUpperCase() === 'LIFETIME' ? 'CATable Pro — Founder Lifetime' : 'CATable Pro Edition'}
               </h3>
               <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
                 Zero-knowledge encrypted cloud synchronization & AI Copilot active.

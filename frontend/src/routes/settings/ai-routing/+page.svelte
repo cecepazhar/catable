@@ -109,9 +109,9 @@
   }
 
   function handleTypeChange() {
-    if (formType === 'caterm_hosted') {
-      formBaseUrl = 'https://ai.caterm.com/v1';
-      formModel = 'caterm-omni-fast';
+    if (formType === 'catable_hosted') {
+      formBaseUrl = 'https://ai.catable.com/v1';
+      formModel = 'catable-omni-fast';
     } else if (formType === 'anthropic') {
       formBaseUrl = 'https://api.anthropic.com/v1';
       formModel = 'claude-3-7-sonnet';
@@ -152,8 +152,8 @@
   }
 
   async function handleDeleteProvider(p: AiProvider) {
-    if (p.id === 'caterm-hosted') {
-      showToast('Built-in CATerm Hosted provider cannot be deleted.', 'error');
+    if (p.id === 'catable-hosted') {
+      showToast('Built-in CATable Hosted provider cannot be deleted.', 'error');
       return;
     }
     const confirmed = await confirmModal(
@@ -205,7 +205,7 @@
         <div>
           <h2 class="text-base font-semibold text-neutral-900 dark:text-white">Registered AI Providers</h2>
           <p class="{MUTED} text-xs mt-0.5">
-            BYO API keys (Anthropic, OpenAI, DeepSeek, Ollama) and CATerm Pro Hosted AI. All keys are encrypted at rest with SQLCipher Argon2id.
+            BYO API keys (Anthropic, OpenAI, DeepSeek, Ollama) and CATable Pro Hosted AI. All keys are encrypted at rest with SQLCipher Argon2id.
           </p>
         </div>
         <button
@@ -237,21 +237,21 @@
               <tr class="hover:bg-neutral-50 dark:hover:bg-neutral-800/30 transition-colors">
                 <td class="px-4 py-3 font-medium text-neutral-900 dark:text-white">
                   {p.name}
-                  {#if p.id === 'caterm-hosted'}
+                  {#if p.id === 'catable-hosted'}
                     <span class="ml-1.5 px-1.5 py-0.5 text-[10px] font-bold rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
                       DEFAULT
                     </span>
                   {/if}
                 </td>
                 <td class="px-4 py-3 font-mono text-neutral-600 dark:text-neutral-300">
-                  <span class="px-2 py-0.5 rounded text-[11px] font-medium {p.provider_type === 'caterm_hosted' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' : p.provider_type === 'anthropic' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : p.provider_type === 'ollama' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'}">
+                  <span class="px-2 py-0.5 rounded text-[11px] font-medium {p.provider_type === 'catable_hosted' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' : p.provider_type === 'anthropic' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : p.provider_type === 'ollama' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'}">
                     {p.provider_type}
                   </span>
                 </td>
                 <td class="px-4 py-3 font-mono text-neutral-500 dark:text-neutral-400 truncate max-w-xs">{p.base_url}</td>
                 <td class="px-4 py-3 font-mono text-neutral-800 dark:text-neutral-200">{p.default_model}</td>
                 <td class="px-4 py-3">
-                  {#if p.provider_type === 'caterm_hosted'}
+                  {#if p.provider_type === 'catable_hosted'}
                     <span class="text-neutral-500 dark:text-neutral-400">Pro Token Handshake</span>
                   {:else if p.provider_type === 'ollama'}
                     <span class="text-emerald-600 dark:text-emerald-400">No Key Needed (Local)</span>
@@ -277,7 +277,7 @@
                   >
                     Edit
                   </button>
-                  {#if p.id !== 'caterm-hosted'}
+                  {#if p.id !== 'catable-hosted'}
                     <button
                       onclick={() => handleDeleteProvider(p)}
                       class="text-rose-600 dark:text-rose-400 hover:underline font-medium"
@@ -432,7 +432,7 @@
         <div>
           <label class={LABEL}>Provider Protocol / Type</label>
           <select bind:value={formType} onchange={handleTypeChange} class={INPUT}>
-            <option value="caterm_hosted">CATerm Hosted AI (OmniRoute Pro)</option>
+            <option value="catable_hosted">CATable Hosted AI (OmniRoute Pro)</option>
             <option value="anthropic">Anthropic Messages API (/v1/messages)</option>
             <option value="openai_compatible">OpenAI Compatible (OpenAI, DeepSeek, Groq)</option>
             <option value="ollama">Local Ollama (/api/chat)</option>
@@ -449,7 +449,7 @@
           <input type="text" bind:value={formModel} class={INPUT} />
         </div>
 
-        {#if formType !== 'ollama' && formType !== 'caterm_hosted'}
+        {#if formType !== 'ollama' && formType !== 'catable_hosted'}
           <div>
             <label class={LABEL}>
               API Key {editingProviderId ? '(Leave blank to keep current key)' : ''}

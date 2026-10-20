@@ -34,7 +34,7 @@
     <div class="flex justify-center mb-3">
       <Logo size={48} mode="brand" />
     </div>
-    <h2 id="about-title" class="text-lg font-bold text-neutral-900 dark:text-white">CATerm</h2>
+    <h2 id="about-title" class="text-lg font-bold text-neutral-900 dark:text-white">CATable</h2>
     <p class="mt-1 text-xs font-mono text-sky-600 dark:text-sky-400">v{APP_VERSION}</p>
     <p class="mt-3 text-sm text-neutral-500 dark:text-neutral-400">
       {t('about.tagline')}
@@ -48,13 +48,13 @@
       <div class="flex justify-between py-2">
         <dt class="text-neutral-500">{t('about.website')}</dt>
         <dd>
-          <a href={WEBSITE_URL} target="_blank" rel="noreferrer" class="text-sky-600 dark:text-sky-400 hover:underline font-mono">caterm.fathforce.com</a>
+          <a href={WEBSITE_URL} target="_blank" rel="noreferrer" class="text-sky-600 dark:text-sky-400 hover:underline font-mono">catable.fathforce.com</a>
         </dd>
       </div>
       <div class="flex justify-between py-2">
         <dt class="text-neutral-500">{t('about.source')}</dt>
         <dd>
-          <a href={REPO_URL} target="_blank" rel="noreferrer" class="text-sky-600 dark:text-sky-400 hover:underline font-mono">cecepazhar/caterm</a>
+          <a href={REPO_URL} target="_blank" rel="noreferrer" class="text-sky-600 dark:text-sky-400 hover:underline font-mono">cecepazhar/catable</a>
         </dd>
       </div>
       <div class="flex justify-between py-2">

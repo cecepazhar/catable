@@ -153,7 +153,7 @@
           {#if searchQuery}
             No habits matched FTS5 query "{searchQuery}".
           {:else}
-            No developer habits recorded yet. As you execute commands in the terminal (e.g. git, podman, nvim), CATerm will passively learn your preferences!
+            No developer habits recorded yet. As you execute commands in the terminal (e.g. git, podman, nvim), CATable will passively learn your preferences!
           {/if}
         </div>
       {:else}

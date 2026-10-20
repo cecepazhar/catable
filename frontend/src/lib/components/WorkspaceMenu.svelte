@@ -44,7 +44,7 @@
 />
 
 <div class="relative inline-flex items-center no-drag" bind:this={root}>
-  <!-- Icon-only Workspace Trigger Button (Matched with CATerm) -->
+  <!-- Icon-only Workspace Trigger Button (Matched with CATable) -->
   <button
     type="button"
     onclick={() => (open = !open)}

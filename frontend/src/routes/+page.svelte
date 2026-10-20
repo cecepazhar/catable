@@ -1,333 +1,201 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n/index.svelte';
-  import { listNotes, saveNote, deleteNote, type NoteRecord, type NoteInput } from '$lib/api/notes';
-  import { showToast, confirmModal } from '$lib/stores/uiNotifications.svelte';
+  import { dbStore, type ConnectionConfig, DEFAULT_SANDBOX_CONNECTION } from '$lib/stores/database.svelte';
+  import { showToast } from '$lib/stores/uiNotifications.svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import LoadingState from '$lib/components/LoadingState.svelte';
 
-  let notes = $state<NoteRecord[]>([]);
-  let searchQuery = $state('');
-  let isLoading = $state(false);
-  let isAddModalOpen = $state(false);
+  let isModalOpen = $state(false);
   let editingId = $state<string | null>(null);
+  let form = $state<ConnectionConfig>({ ...DEFAULT_SANDBOX_CONNECTION, id: '' });
+  let isTesting = $state(false);
+  let testResult = $state<{ success: boolean; message: string } | null>(null);
+  let activeSection = $state<'connections'>('connections');
 
-  // Form state
-  let formTitle = $state('');
-  let formContent = $state('');
-  let formCategory = $state('Personal');
-  let formVisibility = $state<'shared' | 'private_summary' | 'private'>('shared');
-  let currentProfileId = $state('018e0000-0000-7000-8000-000000000001'); // Default Owner profile
+  onMount(async () => {
+    await dbStore.loadConnections();
+  });
 
-  let filteredNotes = $derived(
-    notes.filter((n) => {
-      const q = searchQuery.toLowerCase().trim();
-      if (!q) return true;
-      return (
-        n.title.toLowerCase().includes(q) ||
-        n.content.toLowerCase().includes(q) ||
-        (n.category && n.category.toLowerCase().includes(q))
-      );
-    })
-  );
+  const ENV_COLORS: Record<string, string> = {
+    development: 'text-emerald-500 bg-emerald-500/10',
+    staging: 'text-amber-500 bg-amber-500/10',
+    production: 'text-rose-500 bg-rose-500/10',
+  };
 
-  async function loadNotes() {
-    isLoading = true;
-    try {
-      notes = await listNotes(currentProfileId, true);
-    } catch (e: any) {
-      showToast(e?.message || 'Failed to load notes', 'error');
-    } finally {
-      isLoading = false;
-    }
-  }
+  const DRV_LABELS: Record<string, string> = {
+    sqlite: 'SQLite',
+    postgres: 'PostgreSQL',
+    mysql: 'MySQL',
+    mariadb: 'MariaDB',
+    duckdb: 'DuckDB',
+    redis: 'Redis',
+  };
 
-  function openAddModal() {
+  function openAdd() {
     editingId = null;
-    formTitle = '';
-    formContent = '';
-    formCategory = 'Personal';
-    formVisibility = 'shared';
-    isAddModalOpen = true;
+    form = { ...DEFAULT_SANDBOX_CONNECTION, id: '', name: '', database: '', host: '', port: 5432, user: 'postgres', driver: 'postgres' };
+    testResult = null;
+    isModalOpen = true;
   }
 
-  function editNote(note: NoteRecord) {
-    editingId = note.id;
-    formTitle = note.title;
-    formContent = note.content;
-    formCategory = note.category || 'Personal';
-    formVisibility = (note.visibility as any) || 'shared';
-    isAddModalOpen = true;
+  function editConn(c: ConnectionConfig) {
+    editingId = c.id;
+    form = { ...c };
+    testResult = null;
+    isModalOpen = true;
   }
 
-  async function handleSaveNote() {
-    if (!formTitle.trim()) {
-      showToast(t('common.required'), 'error');
+  async function handleTest() {
+    if (!form.host && form.driver !== 'sqlite' && form.driver !== 'duckdb') {
+      testResult = { success: false, message: 'Host address is required for network drivers.' };
       return;
     }
-
-    const input: NoteInput = {
-      title: formTitle.trim(),
-      content: formContent.trim(),
-      category: formCategory.trim() || null,
-      visibility: formVisibility
-    };
-
+    isTesting = true;
+    testResult = null;
     try {
-      await saveNote(input, currentProfileId);
-      showToast(t('notes.saveSuccess'), 'success');
-      isAddModalOpen = false;
-      await loadNotes();
+      const res = await dbStore.testConnection(form);
+      testResult = { success: res.success, message: res.message + ' · ' + res.server_version };
     } catch (e: any) {
-      showToast(e?.message || 'Failed to save note', 'error');
+      testResult = { success: false, message: e?.message || 'Failed to establish network test.' };
+    } finally {
+      isTesting = false;
     }
   }
 
-  async function handleDeleteNote(id: string) {
-    const ok = await confirmModal(
-      t('notes.deleteConfirm'),
-      t('common.delete'),
-      true,
-      t('common.delete'),
-      t('common.cancel')
-    );
+  async function handleSave() {
+    if (!form.name.trim()) {
+      showToast('Connection label is required.', 'error');
+      return;
+    }
+    try {
+      // Ensure id exists for upsert
+      if (!form.id) {
+        form.id = 'conn-' + Date.now();
+      }
+      await dbStore.saveConnection(form);
+      showToast(`Connection "${form.name}" saved successfully.`, 'success');
+      isModalOpen = false;
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to save connection.', 'error');
+    }
+  }
+
+  async function handleDelete(c: ConnectionConfig) {
+    const ok = await confirm(`Delete connection "${c.name}"?`, 'Delete Connection', true, 'Delete', 'Cancel');
     if (!ok) return;
-
     try {
-      await deleteNote(id, currentProfileId);
-      showToast(t('notes.deleteSuccess'), 'success');
-      await loadNotes();
+      await dbStore.deleteConnection(c.id);
+      showToast(`Connection "${c.name}" deleted.`, 'success');
     } catch (e: any) {
-      showToast(e?.message || 'Failed to delete note', 'error');
+      showToast(e?.message || 'Failed to delete connection.', 'error');
     }
   }
 
-  function toggleFavorite(note: NoteRecord) {
-    const updated = { ...note, is_favorite: !note.is_favorite };
-    notes = notes.map((n) => (n.id === note.id ? updated : n));
+  function confirm(msg: string, title: string, confirm: boolean, yesLabel: string, noLabel: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const result = window.confirm(`${msg}`);
+      resolve(result);
+    });
   }
-
-  function formatDate(timestamp: number): string {
-    if (!timestamp) return 'Just now';
-    const date = new Date(timestamp * 1000);
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-
-  onMount(() => {
-    void loadNotes();
-  });
 </script>
 
 <div class="flex flex-col h-full overflow-y-auto px-6 py-5 space-y-4 max-w-7xl mx-auto w-full">
   <!-- Page Header -->
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="w-8 h-8 rounded-lg bg-sky-100 dark:bg-sky-950/60 border border-sky-200/80 dark:border-sky-800/60 flex items-center justify-center text-sky-600 dark:text-sky-400 font-mono font-bold text-xs shadow-2xs">
+      <div class="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-950/60 border border-blue-200/80 dark:border-blue-800/60 flex items-center justify-center text-blue-600 dark:text-blue-400 font-mono font-bold text-xs shadow-2xs">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 00-2 2v5a2 2 0 002 2h14a2 2 0 002-2v-5a2 2 0 00-2-2M5 12a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v5a2 2 0 01-2 2M5 12v5" />
         </svg>
       </div>
       <div>
-        <h1 class="text-lg font-bold tracking-tight text-neutral-900 dark:text-neutral-100 leading-tight">{t('notes.title')}</h1>
-        <p class="text-[11px] text-neutral-500 dark:text-neutral-400">{notes.length} saved notes in encrypted vault</p>
+        <h1 class="text-lg font-bold tracking-tight text-neutral-900 dark:text-neutral-100 leading-tight">Database Connections</h1>
+        <p class="text-[11px] text-neutral-500 dark:text-neutral-400">{dbStore.connections.length} connections saved in encrypted vault</p>
       </div>
     </div>
 
-    <div class="flex items-center gap-2">
-      <!-- Display toggle button -->
-      <button
-        type="button"
-        class="p-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700/80 bg-white dark:bg-neutral-800/80 text-neutral-500 hover:text-neutral-800 dark:hover:text-white shadow-2xs transition-colors"
-        title={'Display view'}
-      >
-        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
-      </button>
-
-      <!-- Add Note Button -->
-      <button
-        onclick={openAddModal}
-        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white rounded-lg shadow-sm transition-colors cursor-pointer"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
-        </svg>
-        <span>{t('notes.addNote')}</span>
-      </button>
-    </div>
-  </div>
-
-  <!-- Search Bar -->
-  <div class="relative">
-    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-neutral-400">
-      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-      </svg>
-    </div>
-    <input
-      type="text"
-      bind:value={searchQuery}
-      placeholder={'Search by title, content, or category...'}
-      class="w-full pl-9 pr-8 py-2 text-xs bg-white dark:bg-neutral-900/90 border border-neutral-200/90 dark:border-neutral-800 rounded-xl text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none focus:ring-1 focus:ring-sky-500 shadow-2xs"
-    />
-    <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-neutral-400">
+    <button
+      onclick={openAdd}
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors cursor-pointer"
+    >
       <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
       </svg>
-    </div>
+      <span>New Connection</span>
+    </button>
   </div>
 
-  <!-- Shortcuts Guide & Sort Header -->
-  <div class="flex items-center justify-between text-[11px] text-neutral-400 pt-0.5">
-    <div class="flex items-center gap-3 px-2 py-1 rounded-lg bg-neutral-100/60 dark:bg-neutral-900/60 border border-neutral-200/60 dark:border-neutral-800/60">
-      <span class="flex items-center gap-1">
-        <kbd class="px-1 py-0.2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-[10px] text-neutral-500 font-mono">↑↓</kbd>
-        <span class="text-neutral-500 dark:text-neutral-400">select</span>
-      </span>
-      <span class="flex items-center gap-1">
-        <kbd class="px-1 py-0.2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-[10px] text-neutral-500 font-mono">↵</kbd>
-        <span class="text-neutral-500 dark:text-neutral-400">open</span>
-      </span>
-      <span class="flex items-center gap-1">
-        <kbd class="px-1 py-0.2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-[10px] text-neutral-500 font-mono">⇧↵</kbd>
-        <span class="text-neutral-500 dark:text-neutral-400">details</span>
-      </span>
-    </div>
-
-    <div class="flex items-center gap-1.5">
-      <span class="text-neutral-400 text-xs">Sort</span>
-      <button
-        type="button"
-        class="flex items-center gap-1 px-2.5 py-1 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 shadow-2xs transition-colors"
-      >
-        <span>Title</span>
-        <svg class="w-3 h-3 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-    </div>
-  </div>
-
-  {#if isLoading}
-    <LoadingState message={t('common.loading')} />
-  {:else if filteredNotes.length === 0}
+  <!-- Connections List -->
+  {#if dbStore.connections.length === 0}
     <EmptyState
-      title={t('notes.noNotes')}
-      description={t('notes.subtitle')}
-      icon="notes"
-      actionLabel={t('notes.addNote')}
-      onaction={openAddModal}
+      title="No Saved Connections"
+      description="Create a new database connection to start managing and querying data."
+      icon="connections"
+      actionLabel="New Connection"
+      onaction={openAdd}
     />
   {:else}
-    <!-- Notes 2-Column Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
-      {#each filteredNotes as note (note.id)}
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 pt-1">
+      {#each dbStore.connections as conn (conn.id)}
         <div
-          class="group relative flex flex-col justify-between p-3.5 bg-white dark:bg-neutral-900/90 border border-neutral-200/90 dark:border-neutral-800 rounded-2xl shadow-2xs hover:shadow-md transition-all duration-150 space-y-2.5"
+          class="group relative flex flex-col justify-between p-4 bg-white dark:bg-neutral-900/90 border border-neutral-200/90 dark:border-neutral-800 rounded-2xl shadow-2xs hover:shadow-md transition-all duration-150 space-y-3 cursor-pointer"
+          onclick={() => {
+            dbStore.setActiveConnection(conn);
+            activeSection = 'connections';
+          }}
         >
-          <!-- Card Top Row: Icon, Title, Category Pill, Star -->
           <div class="flex items-start justify-between gap-2">
-            <div class="flex items-center gap-2.5 min-w-0">
-              <!-- Note Category Avatar Circle -->
-              <div
-                class="w-7 h-7 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0 shadow-2xs bg-indigo-600"
-              >
-                <span class="text-[11px] font-bold">{(note.title || 'N').slice(0, 1).toUpperCase()}</span>
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
+                <svg class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 10c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                </svg>
               </div>
 
-              <!-- Title & Category Pill -->
-              <div class="flex items-center gap-2 min-w-0">
-                <h3 class="font-bold text-sm text-neutral-900 dark:text-neutral-100 truncate">{note.title}</h3>
-                {#if note.category}
-                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-400 border border-sky-200/60 dark:border-sky-800/40 shrink-0">
-                    <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
-                    {note.category}
-                  </span>
-                {/if}
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <h3 class="font-bold text-sm text-neutral-900 dark:text-neutral-100 truncate">{conn.name}</h3>
+                  {#if conn.id === dbStore.activeConnection.id}
+                    <span class="text-[9px] font-bold bg-blue-500 text-white rounded px-1.5 py-0.5 tracking-wider">ACTIVE</span>
+                  {/if}
+                </div>
+                <div class="flex items-center gap-2 mt-1 text-[10px] font-mono text-neutral-500 dark:text-neutral-400">
+                  <span class="uppercase bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-700 dark:text-neutral-300">{DRV_LABELS[conn.driver]}</span>
+                  <span class={`px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide ${ENV_COLORS[conn.environment]}`}>{conn.environment}</span>
+                </div>
               </div>
             </div>
 
-            <!-- Star Toggle -->
-            <button
-              onclick={() => toggleFavorite(note)}
-              class="p-1 text-neutral-300 hover:text-amber-400 transition-colors"
-              title={'Star host'}
-            >
-              {#if note.is_favorite}
-                <svg class="w-4 h-4 text-amber-400 fill-amber-400" viewBox="0 0 24 24">
-                  <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
-                </svg>
-              {:else}
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                </svg>
-              {/if}
-            </button>
-          </div>
-
-          <!-- Note Content Excerpt -->
-          <p class="text-xs text-neutral-500 dark:text-neutral-400 line-clamp-2 leading-relaxed whitespace-pre-wrap">
-            {note.content || '(Empty note content)'}
-          </p>
-
-          <!-- Badges & Tags Row -->
-          <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
-            <!-- Visibility Tag -->
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 uppercase font-mono">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              {note.visibility}
-            </span>
-
-            <!-- Updated Time -->
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400">
-              <span>Updated {formatDate(note.updated_at)}</span>
-            </span>
-          </div>
-
-          <!-- Footer Action Bar -->
-          <div class="pt-2 border-t border-neutral-100 dark:border-neutral-800/80 flex items-center justify-between">
-            <div class="text-[11px] text-neutral-400 dark:text-neutral-500 font-mono">
-              AES-256-GCM · Encrypted
-            </div>
-
-            <div class="flex items-center gap-1.5">
-              <!-- Edit button -->
+            <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
               <button
-                onclick={() => editNote(note)}
-                type="button"
-                class="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-                title={'Edit host'}
+                onclick={(e) => { e.stopPropagation(); editConn(conn); }}
+                class="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400"
+                title="Edit"
               >
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                </svg>
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
               </button>
-
-              <!-- Delete button -->
               <button
-                onclick={() => handleDeleteNote(note.id)}
-                type="button"
-                class="p-1 rounded text-neutral-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-                title={'More options'}
+                onclick={(e) => { e.stopPropagation(); handleDelete(conn); }}
+                class="p-1.5 rounded hover:bg-rose-50 dark:hover:bg-rose-900/30 text-neutral-400 hover:text-rose-500"
+                title="Delete"
               >
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-
-              <!-- Open / View Button -->
-              <button
-                onclick={() => editNote(note)}
-                class="flex items-center gap-1 px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-              >
-                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-                <span>View</span>
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
               </button>
             </div>
+          </div>
+
+          <div class="pt-2 border-t border-neutral-100 dark:border-neutral-800/80 text-[10px] font-mono text-neutral-500 dark:text-neutral-400 flex justify-between items-center">
+            <span class="truncate">
+              {conn.driver === 'sqlite' ? conn.database : `${conn.user}@${conn.host}:${conn.port}/${conn.database}`}
+            </span>
+            {#if conn.read_only}
+              <span class="text-amber-500 font-semibold flex items-center gap-1">
+                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                Read-Only
+              </span>
+            {/if}
           </div>
         </div>
       {/each}
@@ -335,89 +203,114 @@
   {/if}
 </div>
 
-<!-- Add/Edit Note Modal -->
-{#if isAddModalOpen}
+<!-- Add/Edit Connection Modal -->
+{#if isModalOpen}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
-    <div class="w-full max-w-lg bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-5 shadow-2xl space-y-3.5 text-xs text-neutral-800 dark:text-neutral-200">
+    <div class="w-full max-w-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-5 shadow-2xl space-y-4 text-xs text-neutral-800 dark:text-neutral-200 max-h-[90vh] overflow-y-auto">
       <div class="flex items-center justify-between pb-2 border-b border-neutral-200 dark:border-neutral-800">
         <h3 class="text-sm font-bold text-neutral-900 dark:text-white">
-          {editingId ? t('notes.editNote') : t('notes.addNote')}
+          {editingId ? 'Edit Database Connection' : 'New Database Connection'}
         </h3>
-        <button
-          onclick={() => (isAddModalOpen = false)}
-          class="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-white"
-          aria-label={'Close modal'}
-          title={'Close'}
-        >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+        <button onclick={() => (isModalOpen = false)} class="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-white">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
 
-      <div class="space-y-2.5">
-        <div>
-          <label for="modal-note-title" class="block text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 mb-1">{t('notes.noteTitle')}</label>
-          <input
-            id="modal-note-title"
-            type="text"
-            bind:value={formTitle}
-            placeholder={'Enter note title...'}
-            class="w-full px-3 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-          />
+      <div class="grid grid-cols-2 gap-4">
+        <div class="space-y-1">
+          <label class="font-semibold text-neutral-500 uppercase text-[10px]">Driver Type</label>
+          <select bind:value={form.driver} class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500">
+            <option value="sqlite">SQLite / SQLCipher</option>
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL</option>
+            <option value="mariadb">MariaDB</option>
+            <option value="duckdb">DuckDB</option>
+            <option value="redis">Redis / Valkey</option>
+          </select>
         </div>
 
-        <div>
-          <label for="modal-note-content" class="block text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 mb-1">{t('notes.noteContent')}</label>
-          <textarea
-            id="modal-note-content"
-            rows="5"
-            bind:value={formContent}
-            placeholder={'Write encrypted content here...'}
-            class="w-full px-3 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-          ></textarea>
-        </div>
-
-        <div class="grid grid-cols-2 gap-2.5">
-          <div>
-            <label for="modal-note-category" class="block text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 mb-1">Category</label>
-            <input
-              id="modal-note-category"
-              type="text"
-              bind:value={formCategory}
-              placeholder={'Personal, Work, Ideas'}
-              class="w-full px-3 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-            />
-          </div>
-
-          <div>
-            <label for="modal-note-visibility" class="block text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 mb-1">{t('notes.visibility')}</label>
-            <select
-              id="modal-note-visibility"
-              bind:value={formVisibility}
-              class="w-full px-2.5 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-            >
-              <option value="shared">{t('notes.visibilityShared')}</option>
-              <option value="private_summary">{t('notes.visibilitySummary')}</option>
-              <option value="private">{t('notes.visibilityPrivate')}</option>
-            </select>
-          </div>
+        <div class="space-y-1">
+          <label class="font-semibold text-neutral-500 uppercase text-[10px]">Environment</label>
+          <select bind:value={form.environment} class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500">
+            <option value="development">Development</option>
+            <option value="staging">Staging</option>
+            <option value="production">Production (Read-Only)</option>
+          </select>
+          {#if form.environment === 'production'}
+            <div class="text-[10px] text-rose-500 font-medium flex items-center gap-1 mt-1">
+              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+              Production connections are automatically forced to READ-ONLY mode.
+            </div>
+          {/if}
         </div>
       </div>
 
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+      <div class="space-y-1">
+        <label class="font-semibold text-neutral-500 uppercase text-[10px]">Connection Label</label>
+        <input bind:value={form.name} placeholder="My Postgres Database" class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500" />
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div class="space-y-1">
+          <label class="font-semibold text-neutral-500 uppercase text-[10px]">
+            {form.driver === 'sqlite' ? 'File Path' : 'Host / Address'}
+          </label>
+          <input bind:value={form.host} placeholder={form.driver === 'sqlite' ? '/path/to/db.sqlite' : '127.0.0.1'} class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500" />
+        </div>
+
+        <div class="space-y-1">
+          <label class="font-semibold text-neutral-500 uppercase text-[10px]">
+            {form.driver === 'sqlite' ? 'Database Name' : 'Port'}
+          </label>
+          {#if form.driver === 'sqlite'}
+            <input bind:value={form.database} placeholder="app.sqlite" class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          {:else}
+            <input type="number" bind:value={form.port} class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          {/if}
+        </div>
+
+        {#if form.driver !== 'sqlite'}
+          <div class="space-y-1">
+            <label class="font-semibold text-neutral-500 uppercase text-[10px]">Database Name</label>
+            <input bind:value={form.database} placeholder="production_db" class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          </div>
+
+          <div class="space-y-1">
+            <label class="font-semibold text-neutral-500 uppercase text-[10px]">Username</label>
+            <input bind:value={form.user} placeholder="postgres" class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          </div>
+
+          <div class="space-y-1">
+            <label class="font-semibold text-neutral-500 uppercase text-[10px]">Password (encrypted in vault)</label>
+            <input type="password" bind:value={form.password} placeholder="••••••••" class="w-full px-2.5 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          </div>
+        {/if}
+      </div>
+
+      {#if testResult}
+        <div class={`p-3 rounded-lg text-xs font-medium border ${testResult.success ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400' : 'bg-rose-50 dark:bg-rose-900/30 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-400'}`}>
+          <div class="font-bold mb-0.5">{testResult.success ? 'Success' : 'Error'}</div>
+          {testResult.message}
+        </div>
+      {/if}
+
+      <div class="flex items-center justify-between pt-3 border-t border-neutral-200 dark:border-neutral-800">
         <button
-          onclick={() => (isAddModalOpen = false)}
-          class="px-3 py-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-800 dark:hover:text-white rounded-lg transition-colors"
+          onclick={handleTest}
+          disabled={isTesting}
+          class="px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200 border border-neutral-300 dark:border-neutral-700 rounded-lg transition-colors disabled:opacity-50 hover:bg-neutral-50 dark:hover:bg-neutral-800"
         >
-          {t('common.cancel')}
+          {isTesting ? 'Testing…' : 'Test Connection'}
         </button>
-        <button
-          onclick={handleSaveNote}
-          class="px-3.5 py-1.5 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 rounded-lg shadow-sm transition-colors cursor-pointer"
-        >
-          {t('common.save')}
-        </button>
+        <div class="flex gap-2">
+          <button onclick={() => (isModalOpen = false)} class="px-3.5 py-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-800 dark:hover:text-white rounded-lg transition-colors">Cancel</button>
+          <button
+            onclick={handleSave}
+            class="px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors"
+          >
+            {editingId ? 'Update Connection' : 'Add Connection'}
+          </button>
+        </div>
       </div>
     </div>
   </div>

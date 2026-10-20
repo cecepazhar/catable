@@ -127,7 +127,7 @@
   async function executeStepItem(step: AiPlanStep, i: number) {
     runs[i] = { status: 'running', output: '' };
     try {
-      if (step.action_type === 'caterm_action' || step.action_type === 'caf_action') {
+      if (step.action_type === 'catable_action' || step.action_type === 'caf_action') {
         const action = (step.action_name || '').toLowerCase();
         const params = step.action_params || {};
 

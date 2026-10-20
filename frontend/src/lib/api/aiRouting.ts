@@ -8,7 +8,7 @@ export type TaskType =
   | 'security_review';
 
 export type ProviderType =
-  | 'caterm_hosted'
+  | 'catable_hosted'
   | 'anthropic'
   | 'openai_compatible'
   | 'ollama';

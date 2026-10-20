@@ -1,7 +1,7 @@
 <script lang="ts">
   // Settings → Subscription → Team: the owner's team (invite, members, pending invites), the
   // team this account belongs to, and invitations addressed to it. Invitees need no Pro, only a
-  // free CATerm account with the invited email (pricing notes §2 v1.3).
+  // free CATable account with the invited email (pricing notes §2 v1.3).
   import { onMount } from 'svelte';
   import {
     proTeam,
