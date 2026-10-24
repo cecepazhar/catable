@@ -142,6 +142,7 @@
 
 <div class="p-6 max-w-6xl mx-auto space-y-6">
   <PageHeader
+    icon="M4.5 12.75l6 6 9-13.5"
     title="Custom Skills Catalog (@skills)"
     subtitle="Skill modular yang disuntikkan secara otomatis ke Master AI Router saat trigger dipanggil dalam terminal atau floating chat."
   />

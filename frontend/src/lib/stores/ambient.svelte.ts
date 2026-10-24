@@ -20,7 +20,7 @@ export interface AmbientConfig {
   cardGlowStyle: CardGlowStyle;
 }
 
-const STORAGE_KEY = 'caf-ambient-lighting-v1';
+const STORAGE_KEY = 'catable-ambient-lighting-v1';
 
 const DEFAULT_CONFIG: AmbientConfig = {
   enabled: true,

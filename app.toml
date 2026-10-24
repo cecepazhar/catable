@@ -1,5 +1,6 @@
 [app]
 name = "CATable"
+display_name = "CATable"
 slug = "catable"
 bundle_id = "com.fathforce.catable"
 version = "0.1.1"

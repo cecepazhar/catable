@@ -1,4 +1,4 @@
-const STORAGE_PREFIX = 'caframework_feedback_v2';
+const STORAGE_PREFIX = 'catable_feedback_v2';
 
 let showPrompt = $state(false);
 let openedManually = false;

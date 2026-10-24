@@ -15,10 +15,13 @@ mod executor;
 mod guard;
 mod paths;
 mod vault;
+pub mod billing;
+pub mod db;
+pub mod pro;
 
 pub use connection::{ConnectionConfig, DriverKind, Environment};
 pub use driver::DriverRegistry;
-pub use error::CataleError;
+pub use error::{CatermError, CatableError};
 pub use executor::{ConnectionTestResult, QueryExecutor, QueryResult, TableInfo};
 pub use guard::{GuardVerdict, GuardrailEngine, QueryRisk};
 pub use vault::Vault;

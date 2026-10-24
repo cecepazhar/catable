@@ -23,7 +23,7 @@
 
   const generatedNav = $derived(getNavItems());
 
-  // Modules adaptable for CAFramework starter / vertical slices & settings
+  // Modules adaptable for CATable starter / vertical slices & settings
   const defaultModules: MenuItem[] = [
     {
       id: 'profile',

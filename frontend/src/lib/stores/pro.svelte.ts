@@ -7,17 +7,24 @@ import {
   proCommitPending,
   proSync,
   proErrorCode,
+  proSyncVault,
   type ProStatus,
   type SyncOutcome
 } from '$lib/api/pro';
 
 /** How often an unlocked app re-syncs its licence (the server re-issues a 14-day token). */
-const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const SYNC_INTERVAL_MS = 6 * 60 * 1000;
+
+/** How often the Zero-Knowledge E2EE vault re-syncs in the background (30 minutes). */
+const VAULT_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 
 let status = $state<ProStatus | null>(null);
 let serverAvailable = $state<boolean | null>(null);
 let syncing = $state(false);
 let syncTimer: ReturnType<typeof setInterval> | null = null;
+let vaultSyncTimer: ReturnType<typeof setInterval> | null = null;
+let vaultSyncing = $state(false);
+let lastVaultSyncTs = $state<number | null>(null);
 
 export function getPro() {
   return {
@@ -27,7 +34,41 @@ export function getPro() {
     /** This account's own Pro plan or trial is valid on this device. */
     get isPro() {
       const ent = status?.entitlement;
-      return ent?.state === 'valid' && ent.features.includes('cloud_sync');
+      const rawIsPro = status?.is_pro ?? status?.isPro;
+      return (
+        (ent?.state === 'valid' && ent.features.includes('cloud_sync')) ||
+        rawIsPro === true
+      );
+    },
+    /** Zero-Knowledge E2EE cloud sync is connected (pro && last sync succeeded). */
+    get isSyncConnected() {
+      const raw = status?.sync_connected ?? status?.syncConnected;
+      const vaultOk = lastVaultSyncTs !== null && !vaultSyncing;
+      return getPro().isPro && (raw === true || vaultOk);
+    },
+    /** Last Zero-Knowledge E2EE vault sync timestamp (seconds). */
+    get lastVaultSyncTs() {
+      return lastVaultSyncTs;
+    },
+    /** Whether a vault sync is currently in progress. */
+    get vaultSyncing() {
+      return vaultSyncing;
+    },
+    /** SSH Bastion 1-Click tunnel builder is available. */
+    get isBastionAvailable() {
+      const raw = status?.ssh_bastion_available ?? status?.sshBastionAvailable;
+      return getPro().isPro && raw === true;
+    },
+    /** Blast-Radius Shield is enabled on this device. */
+    get blastRadiusShieldAvailable() {
+      const raw =
+        status?.blast_radius_shield_available ?? status?.blastRadiusShieldAvailable;
+      return getPro().isPro && raw === true;
+    },
+    /** PII Masking is a Pro entitlement. */
+    get isPiiMaskingEnabled() {
+      const ent = status?.entitlement;
+      return getPro().isPro && (ent?.state !== 'valid' || ent.features.includes('pii_masking'));
     },
     /** Access through someone else's team only (free account in an entitled team). */
     get isTeamMember() {
@@ -77,13 +118,29 @@ export async function syncPro(): Promise<SyncOutcome | null> {
   }
 }
 
+/** Zero-Knowledge E2EE vault sync (returns last-sync timestamp in seconds). */
+export async function syncVaultNow(): Promise<number | null> {
+  if (vaultSyncing) return lastVaultSyncTs;
+  vaultSyncing = true;
+  try {
+    const ts = await proSyncVault();
+    lastVaultSyncTs = ts;
+    await refreshProStatus();
+    return ts;
+  } catch {
+    return lastVaultSyncTs;
+  } finally {
+    vaultSyncing = false;
+  }
+}
+
 export function setProStatus(next: ProStatus): void {
   status = next;
 }
 
 /**
- * Called once the vault is open: saves a sign-in made on the lock screen, then syncs in the
- * background (and every few hours while the app stays unlocked).
+ * Called once the vault is open: commits any pending sign-in, then syncs the Pro license
+ * and the Zero-Knowledge E2EE vault in the background.
  */
 export async function onVaultUnlocked(): Promise<void> {
   try {
@@ -94,15 +151,25 @@ export async function onVaultUnlocked(): Promise<void> {
   await refreshProStatus();
   void checkProServer();
   if (status?.signedIn) void syncPro().catch(() => {});
+  if (getPro().isPro) void syncVaultNow().catch(() => {});
+
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = setInterval(() => {
     if (status?.signedIn) void syncPro().catch(() => {});
   }, SYNC_INTERVAL_MS);
+
+  if (vaultSyncTimer) clearInterval(vaultSyncTimer);
+  vaultSyncTimer = setInterval(() => {
+    if (getPro().isPro) void syncVaultNow().catch(() => {});
+  }, VAULT_SYNC_INTERVAL_MS);
 }
 
 /** Vault locked or app signed out: forget in-memory Pro state until the next unlock. */
 export function onVaultLocked(): void {
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = null;
+  if (vaultSyncTimer) clearInterval(vaultSyncTimer);
+  vaultSyncTimer = null;
   status = null;
+  lastVaultSyncTs = null;
 }

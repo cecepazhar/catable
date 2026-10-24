@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum QueryRisk {
     Safe,
     Warning,
+    Destructive,
     Blocked,
 }
 
@@ -22,8 +23,9 @@ impl GuardrailEngine {
     ///
     /// Rules:
     /// 1. If connection is `read_only`, any non-SELECT/EXPLAIN/PRAGMA/SHOW statement is `Blocked`.
-    /// 2. If the statement is a `DROP TABLE` or `TRUNCATE`, it is `Blocked` on production, `Warning` otherwise.
-    /// 3. If the statement is a `DELETE` or `UPDATE` with no `WHERE` clause, it is `Blocked` on production, `Warning` otherwise.
+    /// 2. If the statement is a `DROP TABLE`/`TRUNCATE`/`DROP DATABASE`, it is `Blocked` on production, `Destructive` otherwise.
+    /// 3. If the statement is a `DELETE` or `UPDATE` with no `WHERE` clause, it is `Blocked` on production, `Destructive` otherwise.
+    /// 4. If the statement is an `ALTER TABLE`, `DROP INDEX`, `DROP VIEW`, or targeted `DELETE`/`UPDATE`, it is `Warning`.
     pub fn evaluate(sql: &str, conn: &ConnectionConfig) -> GuardVerdict {
         let trimmed = sql.trim();
         let upper = trimmed.to_uppercase();
@@ -46,7 +48,7 @@ impl GuardrailEngine {
         }
 
         // 2. Destructive DDL: DROP / TRUNCATE
-        if upper.starts_with("DROP TABLE") || upper.starts_with("TRUNCATE") {
+        if upper.starts_with("DROP TABLE") || upper.starts_with("DROP DATABASE") || upper.starts_with("TRUNCATE") {
             if conn.is_production() {
                 return GuardVerdict {
                     risk: QueryRisk::Blocked,
@@ -54,8 +56,8 @@ impl GuardrailEngine {
                 };
             } else {
                 return GuardVerdict {
-                    risk: QueryRisk::Warning,
-                    reason: Some("Potentially destructive DDL: verify target table before running.".into()),
+                    risk: QueryRisk::Destructive,
+                    reason: Some("Destructive DDL: will permanently delete tables or data.".into()),
                 };
             }
         }
@@ -72,10 +74,25 @@ impl GuardrailEngine {
                 };
             } else {
                 return GuardVerdict {
-                    risk: QueryRisk::Warning,
-                    reason: Some("Unbounded DELETE/UPDATE will affect all rows in the target table.".into()),
+                    risk: QueryRisk::Destructive,
+                    reason: Some("Destructive query: Unbounded DELETE/UPDATE affects all rows in the target table.".into()),
                 };
             }
+        }
+
+        // 4. Schema alterations & targeted mutations: Warning
+        if upper.starts_with("ALTER TABLE") || upper.starts_with("DROP INDEX") || upper.starts_with("DROP VIEW") {
+            return GuardVerdict {
+                risk: QueryRisk::Warning,
+                reason: Some("Schema modification: verify target object definition before applying.".into()),
+            };
+        }
+
+        if upper.starts_with("DELETE FROM") || upper.starts_with("UPDATE") {
+            return GuardVerdict {
+                risk: QueryRisk::Warning,
+                reason: Some("Data modification: verify WHERE clause conditions before executing.".into()),
+            };
         }
 
         GuardVerdict {
@@ -122,6 +139,13 @@ mod tests {
         assert_eq!(v.risk, QueryRisk::Blocked);
 
         let v_bounded = GuardrailEngine::evaluate("DELETE FROM users WHERE id = 42", &conn);
-        assert_eq!(v_bounded.risk, QueryRisk::Safe);
+        assert_eq!(v_bounded.risk, QueryRisk::Warning);
+
+        let dev_conn = make_conn(Environment::Development, false);
+        let v_drop = GuardrailEngine::evaluate("DROP TABLE users", &dev_conn);
+        assert_eq!(v_drop.risk, QueryRisk::Destructive);
+
+        let v_select = GuardrailEngine::evaluate("SELECT * FROM users", &dev_conn);
+        assert_eq!(v_select.risk, QueryRisk::Safe);
     }
 }

@@ -56,9 +56,10 @@ const en = {
     selectColor: 'Select color {{color}}'
   },
   nav: {
-    notes: 'Notes',
-    workspace: 'Workspace',
-    vault: 'Encrypted Vault',
+    connections: 'Connections',
+    sql_studio: 'SQL Studio',
+    table_browser: 'Table Browser',
+    schema_erd: 'Schema ERD',
     ai_copilot: 'AI Copilot',
     settings: 'Settings',
     contribution: 'Support & Contribution',
@@ -1028,6 +1029,8 @@ const en = {
 			gpuTitle: 'GPU acceleration',
 			gpuBody: 'Uses graphics card to draw interface and terminals. Turning off (default) saves memory and uses software rendering.',
 			recommendedGpuOff: 'Default: Off (saves RAM)',
+			smoothScrollingTitle: 'Smooth Scrolling',
+			smoothScrollingBody: 'Enables fluid physics-based scrolling animation in large data tables and query results.',
 			scrollbackTitle: 'Terminal Scrollback Buffer Limit',
 			scrollbackBody: 'Limits maximum history lines kept in RAM per terminal session to prevent memory spikes during high-volume logs.',
 			scrollback1k: '1,000 lines (Minimal RAM)',

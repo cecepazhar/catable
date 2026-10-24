@@ -3,7 +3,7 @@
   import { showToast } from '$lib/stores/uiNotifications.svelte';
   import { errorText } from '$lib/errors';
 
-  const STORAGE_KEY_PREFIX = 'caframework_feedback_state';
+  const STORAGE_KEY_PREFIX = 'catable_feedback_state';
   const APP_VERSION = 'v2';
 
   let {
@@ -108,7 +108,7 @@
   <div>
     <h3 class="text-lg font-semibold text-neutral-900 dark:text-white tracking-tight">Send Feedback</h3>
     <p class="text-sm text-neutral-600 dark:text-neutral-400 mt-1">
-      Help us improve CAFramework. Share your rating or report any issues you encountered.
+      Help us improve CATable. Share your rating or report any issues you encountered.
     </p>
   </div>
 
@@ -123,7 +123,7 @@
         <div>
           <h4 class="text-sm font-semibold text-neutral-900 dark:text-white">Feedback Submitted!</h4>
           <p class="text-xs text-neutral-600 dark:text-neutral-300 mt-0.5">
-            Thank you for your time and feedback. Your input helps us build a better CAFramework.
+            Thank you for your time and feedback. Your input helps us build a better CATable.
           </p>
         </div>
       </div>
@@ -229,7 +229,7 @@
           bind:value={content}
           rows="4"
           maxlength="2000"
-          placeholder="Share what you like or what could be improved in CAFramework..."
+          placeholder="Share what you like or what could be improved in CATable..."
           class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-sky-500 resize-y"
         ></textarea>
         <div class="flex justify-between items-center text-xs text-neutral-500 dark:text-neutral-400">
@@ -250,7 +250,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <p>
-          Feedback is sent to the CAFramework team for review and may be featured on our website (with permission).
+          Feedback is sent to the CATable team for review and may be featured on our website (with permission).
         </p>
       </div>
 

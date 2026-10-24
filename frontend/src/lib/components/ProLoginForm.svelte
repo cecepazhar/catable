@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Sign in / create account / forgot password for CAFramework Pro. Used on the lock screen (before
+  // Sign in / create account / forgot password for CATable Pro. Used on the lock screen (before
   // the vault is open — the backend holds the session until unlock) and in Settings.
   // The Pro password is deliberately separate from the vault master password.
   import { t, getLocale } from '$lib/i18n/index.svelte';
@@ -11,9 +11,21 @@
     proErrorCode,
     type ProAccount
   } from '$lib/api/pro';
+  import { getPro } from '$lib/stores/pro.svelte';
   import { errorText } from '$lib/errors';
 
   let { onSignedIn }: { onSignedIn: (account: ProAccount) => void } = $props();
+
+  const pro = getPro();
+
+  const proFeatures = $derived([
+    { id: 'cloud_sync', name: 'Cloud Sync', desc: 'Zero-Knowledge E2EE Sync', active: pro.isPro },
+    { id: 'ssh_bastion', name: 'SSH Bastion', desc: '1-Click Bastion Tunnels', active: pro.isPro },
+    { id: 'blast_shield', name: 'Blast-Radius Shield', desc: 'Dry-Run Simulation', active: pro.isPro },
+    { id: 'erd_diff', name: 'ERD Diff', desc: 'Visual Schema Migrations', active: pro.isPro },
+    { id: 'ai_copilot', name: 'AI DBA Copilot', desc: 'Context-Aware SQL Assistant', active: pro.isPro },
+    { id: 'pii_masking', name: 'PII Masking', desc: 'Automatic Sensitive Data Redaction', active: pro.isPro }
+  ]);
 
   type Mode = 'login' | 'register' | 'forgot' | 'checkEmail';
   let mode = $state<Mode>('login');
@@ -185,4 +197,34 @@
       {/if}
     </div>
   {/if}
+
+  <!-- Dynamic Pro Tier Features Preview -->
+  <div class="pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2">
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+        </svg>
+        Pro Capabilities
+      </span>
+      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded {pro.isPro ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-500 border border-neutral-200 dark:border-neutral-700'}">
+        {pro.isPro ? 'UNLOCKED' : 'PRO TIER'}
+      </span>
+    </div>
+
+    <div class="grid grid-cols-2 gap-1.5 pt-1">
+      {#each proFeatures as feat (feat.id)}
+        <div class="flex items-center gap-1.5 p-1.5 rounded-md border text-xs {feat.active ? 'bg-emerald-500/5 border-emerald-500/20 text-neutral-800 dark:text-neutral-200' : 'bg-neutral-50/50 dark:bg-neutral-900/40 border-neutral-200/60 dark:border-neutral-800/60 text-neutral-400 dark:text-neutral-500'}">
+          {#if feat.active}
+            <svg class="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M5 13l4 4L19 7" /></svg>
+          {:else}
+            <svg class="w-3.5 h-3.5 text-neutral-400 dark:text-neutral-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+          {/if}
+          <div class="min-w-0">
+            <span class="block font-medium truncate text-[11px] {feat.active ? 'text-neutral-900 dark:text-white' : 'text-neutral-500 dark:text-neutral-400'}">{feat.name}</span>
+          </div>
+        </div>
+      {/each}
+    </div>
+  </div>
 </div>

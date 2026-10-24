@@ -1,5 +1,5 @@
-// CAFramework Pro pricing as shown in the app. The real prices and the new-customer discount live in
-// Lemon Squeezy (caframework-pricing-tiers-v1.md §1.1 and §3) — these numbers are display only and
+// CATable Pro pricing as shown in the app. The real prices and the new-customer discount live in
+// Lemon Squeezy (catable-pricing-tiers-v1.md §1.1 and §3) — these numbers are display only and
 // must be changed together with the Lemon Squeezy variants, never on their own.
 export const PRO_PRICING = {
   monthly: { list: 10, intro: 6 },

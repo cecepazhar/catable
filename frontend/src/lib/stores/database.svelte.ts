@@ -31,7 +31,7 @@ export interface TableInfo {
 }
 
 export interface GuardVerdict {
-  risk: 'safe' | 'warning' | 'blocked';
+  risk: 'safe' | 'warning' | 'destructive' | 'blocked';
   reason?: string | null;
 }
 
@@ -129,7 +129,10 @@ class DatabaseStore {
   }
 
   async evaluateSafety(sql: string): Promise<GuardVerdict> {
-    return invoke<GuardVerdict>('evaluate_query_safety', { sql });
+    return invoke<GuardVerdict>('evaluate_query_safety', {
+      sql,
+      config: this.activeConnection,
+    });
   }
 
   setActiveConnection(conn: ConnectionConfig) {

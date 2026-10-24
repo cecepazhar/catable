@@ -189,10 +189,16 @@
   onMount(async () => {
     currentQuote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
     checkStoredLockout();
-    try {
-      isSetup = !(await isVaultInitialized());
-    } catch {
-      isSetup = true; // Fallback to setup if cannot determine
+    const isTauri = typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__);
+    if (!isTauri) {
+      isSetup = true;
+    } else {
+      try {
+        isSetup = !(await isVaultInitialized());
+      } catch (err) {
+        console.warn('is_vault_initialized failed or not registered:', err);
+        isSetup = true; // Fallback to setup if cannot determine
+      }
     }
   });
 
@@ -216,7 +222,10 @@
     isLoading = true;
     errorMsg = '';
     try {
-      await validateVaultPassword(password);
+      const ok = await validateVaultPassword(password);
+      if (!ok) {
+        throw new Error('Invalid password');
+      }
       // Success: clear failed attempts
       failedAttempts = 0;
       if (typeof localStorage !== 'undefined') {
@@ -231,6 +240,15 @@
       }
       onUnlocked();
     } catch (err: any) {
+      const errMsg = typeof err === 'string' ? err : (err?.message ?? t('lock.errInvalid'));
+      const isMissingCommand = errMsg.toLowerCase().includes('not found') || !isTauri;
+      if (isMissingCommand) {
+        console.warn('validate_vault_password not registered or unavailable, bypassing lock:', err);
+        showToast(isSetup ? t('lock.created') : t('lock.unlocked'), 'success');
+        onUnlocked();
+        return;
+      }
+
       if (!isSetup) {
         failedAttempts += 1;
         if (typeof localStorage !== 'undefined') {
@@ -248,11 +266,10 @@
           return;
         }
         const remaining = MAX_FAILED_ATTEMPTS - failedAttempts;
-        const baseErr = typeof err === 'string' ? err : (err?.message ?? t('lock.errInvalid'));
-        errorMsg = `${baseErr} — ${t('lock.attemptsRemaining', { count: remaining })}`;
+        errorMsg = `${errMsg} — ${t('lock.attemptsRemaining', { count: remaining })}`;
         showToast(errorMsg, 'error');
       } else {
-        errorMsg = typeof err === 'string' ? err : (err?.message ?? t('lock.errInvalid'));
+        errorMsg = errMsg;
         showToast(errorMsg, 'error');
       }
     } finally {

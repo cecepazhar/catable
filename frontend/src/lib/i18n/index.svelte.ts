@@ -18,7 +18,7 @@ export const LOCALES: { code: Locale; label: string }[] = [
   { code: 'id', label: 'Indonesia' }
 ];
 
-const STORAGE_KEY = 'caframework_locale';
+const STORAGE_KEY = 'catable_locale';
 
 function detectInitialLocale(): Locale {
   try {

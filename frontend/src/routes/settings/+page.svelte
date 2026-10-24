@@ -226,6 +226,11 @@
   // Audit Logs Setting
   let maxAuditRecords = $state(1000);
 
+	// Performance preferences state
+	let enableHardwareAcceleration = $state(false);
+	let enableSmoothScrolling = $state(true);
+	let isSavingPerformance = $state(false);
+
   onMount(() => {
     try {
       const stored = localStorage.getItem('catable_max_audit_records');
@@ -233,39 +238,22 @@
     } catch {}
 		getPerformancePrefs()
 			.then((prefs) => {
-				gpuAcceleration = prefs.gpuAcceleration ?? false;
-				backgroundMemorySaving = prefs.backgroundMemorySaving ?? true;
-				scrollbackLines = prefs.scrollbackLines ?? 5000;
-				inactiveSessionSleep = prefs.inactiveSessionSleep ?? true;
-				lowPowerMode = prefs.lowPowerMode ?? false;
+				enableHardwareAcceleration = prefs.enable_hardware_acceleration ?? false;
+				enableSmoothScrolling = prefs.enable_smooth_scrolling ?? true;
 			})
 			.catch(() => {}); // browser preview: no backend, keep default
 	});
 
-	// Performance preferences state
-	let gpuAcceleration = $state(false);
-	let backgroundMemorySaving = $state(true);
-	let scrollbackLines = $state(5000);
-	let inactiveSessionSleep = $state(true);
-	let lowPowerMode = $state(false);
-	let isSavingPerformance = $state(false);
-
 	async function saveAllPerformancePrefs(partial: Partial<PerformancePrefs>, isGpuChange = false) {
 		isSavingPerformance = true;
 		const updated: PerformancePrefs = {
-			gpuAcceleration: partial.gpuAcceleration ?? gpuAcceleration,
-			backgroundMemorySaving: partial.backgroundMemorySaving ?? backgroundMemorySaving,
-			scrollbackLines: partial.scrollbackLines ?? scrollbackLines,
-			inactiveSessionSleep: partial.inactiveSessionSleep ?? inactiveSessionSleep,
-			lowPowerMode: partial.lowPowerMode ?? lowPowerMode
+			enable_hardware_acceleration: partial.enable_hardware_acceleration ?? enableHardwareAcceleration,
+			enable_smooth_scrolling: partial.enable_smooth_scrolling ?? enableSmoothScrolling
 		};
 		try {
 			await setPerformancePrefs(updated);
-			gpuAcceleration = updated.gpuAcceleration;
-			backgroundMemorySaving = updated.backgroundMemorySaving;
-			scrollbackLines = updated.scrollbackLines;
-			inactiveSessionSleep = updated.inactiveSessionSleep;
-			lowPowerMode = updated.lowPowerMode;
+			enableHardwareAcceleration = updated.enable_hardware_acceleration;
+			enableSmoothScrolling = updated.enable_smooth_scrolling;
 			if (!isGpuChange) {
 				showToast(t('settings.performance.saved'), 'success');
 			}
@@ -316,9 +304,9 @@
 
     try {
       showToast(t('settings.backup.creating'), 'info');
-      const b64 = await exportEncryptedBackup(backupPassphrase);
+      const bytes = await exportEncryptedBackup(backupPassphrase);
       
-      const blob = new Blob([b64], { type: 'text/plain' });
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -347,21 +335,22 @@
       input.onchange = async () => {
         const file = input.files?.[0];
         if (!file) return;
-        
+
         showToast(t('settings.backup.importing'), 'info');
-        
+
         const reader = new FileReader();
         reader.onload = async (event) => {
           try {
-            const b64 = event.target?.result as string;
-            const importedCount = await importEncryptedBackup(b64, restorePassphrase);
-            showToast(t('settings.backup.restored', { count: importedCount }), 'success');
+            const buffer = event.target?.result as ArrayBuffer;
+            const bytes = Array.from(new Uint8Array(buffer));
+            await importEncryptedBackup(bytes, restorePassphrase);
+            showToast(t('settings.backup.restored', { count: 1 }), 'success');
             restorePassphrase = '';
           } catch (err: any) {
             showToast(err?.message || t('settings.backup.restoreFailed'), 'error');
           }
         };
-        reader.readAsText(file);
+        reader.readAsArrayBuffer(file);
       };
       input.click();
     } catch (err: any) {
@@ -478,7 +467,7 @@
     </div>
 
     <!-- PRO Ambient Underglow Lighting Card -->
-    <AmbientSettingsCard defaultAccent="#64748b" appName="CAFramework" />
+    <AmbientSettingsCard defaultAccent="#3b82f6" appName="CATable" />
   {:else if activeTab === 'updates'}
     <div class="{CARD} space-y-4">
       <div class="flex flex-wrap justify-between items-center gap-4">
@@ -620,7 +609,7 @@
                 </span>
               </div>
               <h3 class="text-xl font-bold text-neutral-900 dark:text-white mt-1">
-                {pro.status?.license?.plan?.toUpperCase() === 'LIFETIME' ? 'CATable Pro — Founder Lifetime' : 'CATable Pro Edition'}
+                {pro.status?.license?.tier?.toUpperCase() === 'LIFETIME' ? 'CATable Pro — Founder Lifetime' : 'CATable Pro Edition'}
               </h3>
               <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
                 Zero-knowledge encrypted cloud synchronization & AI Copilot active.
@@ -628,10 +617,10 @@
             </div>
             <div class="text-right sm:text-right shrink-0">
               <span class="text-2xl font-black text-neutral-900 dark:text-white">
-                {pro.status?.license?.plan?.toUpperCase() === 'LIFETIME' ? 'Lifetime Access' : '$6.00 / mo'}
+                {pro.status?.license?.tier?.toUpperCase() === 'LIFETIME' ? 'Lifetime Access' : '$6.00 / mo'}
               </span>
               <p class="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-                {pro.status?.license?.plan?.toUpperCase() === 'LIFETIME' ? 'Never Expires · VIP Founder Tier' : 'Next billing cycle synced'}
+                {pro.status?.license?.tier?.toUpperCase() === 'LIFETIME' ? 'Never Expires · VIP Founder Tier' : 'Next billing cycle synced'}
               </p>
             </div>
           </div>
@@ -755,7 +744,7 @@
               {/if}
               <button
                 type="button"
-                onclick={() => openExternalUrl(pricingUrl(pro.status?.account?.id))}
+                onclick={() => openExternalUrl(pricingUrl())}
                 class="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-md text-sm font-semibold bg-sky-600 hover:bg-sky-500 text-white shadow-sm transition-colors"
               >
                 {t('settings.subscription.subscribe')}
@@ -965,27 +954,7 @@
 				<p class="{MUTED} text-sm mt-1">{t('settings.performance.subtitle')}</p>
 			</div>
 
-			<!-- 1. Background Memory Saving (Toggleable, On by default) -->
-			<div class="{SUBCARD} flex items-start justify-between gap-4">
-				<div class="min-w-0">
-					<p class="text-sm font-medium text-neutral-900 dark:text-white">{t('settings.performance.backgroundTitle')}</p>
-					<p class="text-xs {MUTED} mt-1 leading-relaxed">{t('settings.performance.backgroundBody')}</p>
-					<p class="text-[11px] text-neutral-500 mt-2">{t('settings.performance.recommended')}</p>
-				</div>
-				<button
-					type="button"
-					role="switch"
-					aria-checked={backgroundMemorySaving}
-					aria-label={t('settings.performance.backgroundTitle')}
-					disabled={isSavingPerformance}
-					onclick={() => saveAllPerformancePrefs({ backgroundMemorySaving: !backgroundMemorySaving })}
-					class="relative shrink-0 w-11 h-6 rounded-full transition-colors disabled:opacity-50 {backgroundMemorySaving ? 'bg-sky-600' : 'bg-neutral-300 dark:bg-neutral-700'} cursor-pointer"
-				>
-					<span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {backgroundMemorySaving ? 'translate-x-5' : ''}"></span>
-				</button>
-			</div>
-
-			<!-- 2. GPU Acceleration (Off by default) -->
+			<!-- 1. GPU/Hardware Acceleration (Off by default) -->
 			<div class="{SUBCARD} flex items-start justify-between gap-4">
 				<div class="min-w-0">
 					<p class="text-sm font-medium text-neutral-900 dark:text-white">{t('settings.performance.gpuTitle')}</p>
@@ -995,75 +964,36 @@
 				<button
 					type="button"
 					role="switch"
-					aria-checked={gpuAcceleration}
+					aria-checked={enableHardwareAcceleration}
 					aria-label={t('settings.performance.gpuTitle')}
 					disabled={isSavingPerformance}
-					onclick={() => saveAllPerformancePrefs({ gpuAcceleration: !gpuAcceleration }, true)}
-					class="relative shrink-0 w-11 h-6 rounded-full transition-colors disabled:opacity-50 {gpuAcceleration ? 'bg-sky-600' : 'bg-neutral-300 dark:bg-neutral-700'} cursor-pointer"
+					onclick={() => saveAllPerformancePrefs({ enable_hardware_acceleration: !enableHardwareAcceleration }, true)}
+					class="relative shrink-0 w-11 h-6 rounded-full transition-colors disabled:opacity-50 {enableHardwareAcceleration ? 'bg-sky-600' : 'bg-neutral-300 dark:bg-neutral-700'} cursor-pointer"
 				>
-					<span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {gpuAcceleration ? 'translate-x-5' : ''}"></span>
+					<span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {enableHardwareAcceleration ? 'translate-x-5' : ''}"></span>
 				</button>
 			</div>
 
-			<!-- 3. Terminal Scrollback Buffer Limit -->
+			<!-- 2. Smooth Scrolling (On by default) -->
 			<div class="{SUBCARD} flex items-start justify-between gap-4">
 				<div class="min-w-0">
-					<p class="text-sm font-medium text-neutral-900 dark:text-white">{t('settings.performance.scrollbackTitle')}</p>
-					<p class="text-xs {MUTED} mt-1 leading-relaxed">{t('settings.performance.scrollbackBody')}</p>
-				</div>
-				<select
-					value={scrollbackLines}
-					disabled={isSavingPerformance}
-					onchange={(e) => saveAllPerformancePrefs({ scrollbackLines: parseInt(e.currentTarget.value, 10) })}
-					class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-900 dark:text-white focus:outline-none focus:border-sky-500 shrink-0 cursor-pointer"
-				>
-					<option value={1000}>{t('settings.performance.scrollback1k')}</option>
-					<option value={5000}>{t('settings.performance.scrollback5k')}</option>
-					<option value={10000}>{t('settings.performance.scrollback10k')}</option>
-					<option value={50000}>{t('settings.performance.scrollback50k')}</option>
-				</select>
-			</div>
-
-			<!-- 4. Inactive Tab Sleep / Power Saver -->
-			<div class="{SUBCARD} flex items-start justify-between gap-4">
-				<div class="min-w-0">
-					<p class="text-sm font-medium text-neutral-900 dark:text-white">{t('settings.performance.sleepTitle')}</p>
-					<p class="text-xs {MUTED} mt-1 leading-relaxed">{t('settings.performance.sleepBody')}</p>
-					<p class="text-[11px] text-neutral-500 mt-2">{t('settings.performance.recommended')}</p>
+					<p class="text-sm font-medium text-neutral-900 dark:text-white">{t('settings.performance.smoothScrollingTitle')}</p>
+					<p class="text-xs {MUTED} mt-1 leading-relaxed">{t('settings.performance.smoothScrollingBody')}</p>
 				</div>
 				<button
 					type="button"
 					role="switch"
-					aria-checked={inactiveSessionSleep}
-					aria-label={t('settings.performance.sleepTitle')}
+					aria-checked={enableSmoothScrolling}
+					aria-label={t('settings.performance.smoothScrollingTitle')}
 					disabled={isSavingPerformance}
-					onclick={() => saveAllPerformancePrefs({ inactiveSessionSleep: !inactiveSessionSleep })}
-					class="relative shrink-0 w-11 h-6 rounded-full transition-colors disabled:opacity-50 {inactiveSessionSleep ? 'bg-sky-600' : 'bg-neutral-300 dark:bg-neutral-700'} cursor-pointer"
+					onclick={() => saveAllPerformancePrefs({ enable_smooth_scrolling: !enableSmoothScrolling })}
+					class="relative shrink-0 w-11 h-6 rounded-full transition-colors disabled:opacity-50 {enableSmoothScrolling ? 'bg-sky-600' : 'bg-neutral-300 dark:bg-neutral-700'} cursor-pointer"
 				>
-					<span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {inactiveSessionSleep ? 'translate-x-5' : ''}"></span>
+					<span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {enableSmoothScrolling ? 'translate-x-5' : ''}"></span>
 				</button>
 			</div>
 
-			<!-- 5. Low-Power Mode (30 FPS Limiter) -->
-			<div class="{SUBCARD} flex items-start justify-between gap-4">
-				<div class="min-w-0">
-					<p class="text-sm font-medium text-neutral-900 dark:text-white">{t('settings.performance.lowPowerTitle')}</p>
-					<p class="text-xs {MUTED} mt-1 leading-relaxed">{t('settings.performance.lowPowerBody')}</p>
-				</div>
-				<button
-					type="button"
-					role="switch"
-					aria-checked={lowPowerMode}
-					aria-label={t('settings.performance.lowPowerTitle')}
-					disabled={isSavingPerformance}
-					onclick={() => saveAllPerformancePrefs({ lowPowerMode: !lowPowerMode })}
-					class="relative shrink-0 w-11 h-6 rounded-full transition-colors disabled:opacity-50 {lowPowerMode ? 'bg-sky-600' : 'bg-neutral-300 dark:bg-neutral-700'} cursor-pointer"
-				>
-					<span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {lowPowerMode ? 'translate-x-5' : ''}"></span>
-				</button>
-			</div>
-
-			<!-- 6. Lock Screen Animation (On by default) -->
+			<!-- 3. Lock Screen Animation (On by default) -->
 			<div class="{SUBCARD} flex items-start justify-between gap-4">
 				<div class="min-w-0">
 					<p class="text-sm font-medium text-neutral-900 dark:text-white">{t('settings.performance.lockAnimationTitle')}</p>
@@ -1133,7 +1063,7 @@
           {#if deviceLimit.limit < PRO_PRICING.syncDevices}
             <p class="text-xs text-sky-700 dark:text-sky-300 mt-2">
               {t('pro.devices.limitUpsell', { count: PRO_PRICING.syncDevices })}
-              <button type="button" onclick={() => openExternalUrl(pricingUrl(pro.status?.account?.id))} class="font-semibold underline">{t('pro.devices.seePlans')}</button>
+              <button type="button" onclick={() => openExternalUrl(pricingUrl())} class="font-semibold underline">{t('pro.devices.seePlans')}</button>
             </p>
           {/if}
         </div>

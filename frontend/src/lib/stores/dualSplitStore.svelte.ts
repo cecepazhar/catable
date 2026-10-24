@@ -1,4 +1,4 @@
-// Master Layout & Dual-Level Split Foundation for CAFramework products
+// Master Layout & Dual-Level Split Foundation for CATable products
 // (CAGames, CAMark, CABook, CATable, CAProduct, CASuite, etc.)
 
 export type GlobalSplitLayout = 'single' | '2-columns' | '2-rows' | '2x2-grid';

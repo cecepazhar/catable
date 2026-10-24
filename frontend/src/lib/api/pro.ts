@@ -95,15 +95,37 @@ export type Entitlement =
   | { state: 'invalid'; reason: string };
 
 export interface ProStatus {
-  signedIn: boolean;
+  is_pro?: boolean;
+  isPro?: boolean;
+  plan?: string | null;
+  trial_days_left?: number;
+  trialDaysLeft?: number;
+  sync_connected?: boolean;
+  syncConnected?: boolean;
+  ssh_bastion_available?: boolean;
+  sshBastionAvailable?: boolean;
+  blast_radius_shield_available?: boolean;
+  blastRadiusShieldAvailable?: boolean;
+  signedIn?: boolean;
   /** Signed in on the lock screen; saved once the vault unlocks. */
-  pending: boolean;
-  account: ProAccount | null;
-  license: ProLicense | null;
-  entitlement: Entitlement;
-  lastSyncAt: number | null;
+  pending?: boolean;
+  account?: ProAccount | null;
+  license?: ProLicense | null;
+  entitlement?: Entitlement;
+  lastSyncAt?: number | null;
   /** False in builds without the licence public key (dev builds, forks). */
-  keyConfigured: boolean;
+  keyConfigured?: boolean;
+}
+
+export interface BlastRadiusResult {
+  sql: string;
+  riskLevel: string;
+  estimatedRowsAffected: number;
+  tablesAffected: string[];
+  isDestructive: boolean;
+  requiresConfirmation: boolean;
+  shieldAction: string;
+  explanation: string;
 }
 
 export interface DeviceLimit {
@@ -126,6 +148,11 @@ export interface AccountDetails {
 }
 
 export const proStatus = () => invoke<ProStatus>('pro_status');
+export const proSyncVault = () => invoke<number>('pro_sync_vault');
+export const proSshTunnel = (hostId: string, targetPort: number) =>
+  invoke<number>('pro_ssh_tunnel', { hostId, targetPort });
+export const evaluateQueryBlastRadius = (sql: string, connConfig?: unknown) =>
+  invoke<BlastRadiusResult>('evaluate_query_blast_radius', { sql, connConfig });
 export const proServerAvailable = () => invoke<boolean>('pro_server_available');
 export const proRegister = (email: string, password: string, name: string, locale: string) =>
   invoke<void>('pro_register', { email, password, name, locale });

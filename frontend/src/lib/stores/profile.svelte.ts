@@ -3,12 +3,12 @@
 // localStorage (not the vault) on purpose: the lock screen has to greet the user by name
 // *before* the vault is unlocked.
 //
-// The plan comes from CAFramework Pro (a separate email account, see stores/pro): a profile shows
+// The plan comes from CATable Pro (a separate email account, see stores/pro): a profile shows
 // as Pro only while this device holds a valid signed licence. The name/avatar stay local.
 import { getPro } from '$lib/stores/pro.svelte';
 
-const STORAGE_KEY = 'caframework_profile_v1';
-export const DEFAULT_PROFILE_NAME = 'CAFramework User';
+const STORAGE_KEY = 'catable_profile_v1';
+export const DEFAULT_PROFILE_NAME = 'CATable User';
 export const DEFAULT_AVATAR = 'rocket';
 
 export type Plan = 'free' | 'pro';

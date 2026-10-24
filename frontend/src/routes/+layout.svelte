@@ -11,6 +11,7 @@
   import CrashReportModal from '$lib/components/CrashReportModal.svelte';
   import { getPendingCrashReport, type ScrubbedCrashReport } from '$lib/api/crash';
   import ProfileMenu from '$lib/components/ProfileMenu.svelte';
+  import ProCard from '$lib/components/ProCard.svelte';
   import { getFeedbackPromptState } from '$lib/stores/feedbackStore.svelte';
   import { checkForUpdates } from '$lib/stores/updater.svelte';
   import { lockVault } from '$lib/api/vault';
@@ -76,13 +77,19 @@
 
   onMount(() => {
     initTheme();
-    invoke<boolean>('is_vault_unlocked')
-      .then((unlocked) => {
-        isVaultUnlocked = unlocked;
-      })
-      .catch(() => {
-        isVaultUnlocked = false;
-      });
+    const isTauri = typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__);
+    if (!isTauri) {
+      isVaultUnlocked = true;
+    } else {
+      invoke<boolean>('is_vault_unlocked')
+        .then((unlocked) => {
+          isVaultUnlocked = unlocked;
+        })
+        .catch((err) => {
+          console.warn('is_vault_unlocked failed or not registered:', err);
+          isVaultUnlocked = true;
+        });
+    }
 
     getPendingCrashReport()
       .then((report) => {
@@ -193,7 +200,7 @@
 
         <!-- 3. Header Quick Controls (Themes, Language, Settings) -->
         <HeaderQuickControls
-          layout="single"
+          layout={1}
           showFiles={false}
           aiOpen={aiChat.open}
           sessionCount={1}
@@ -289,7 +296,8 @@
         </nav>
 
         <!-- Profile & Settings Footer -->
-        <div class="p-2 space-y-1">
+        <div class="p-2 space-y-2">
+          <ProCard compact={isCollapsed} />
           <ProfileMenu collapsed={isCollapsed} onLock={handleLock} onSignOut={() => {}} />
         </div>
       </aside>
@@ -317,7 +325,7 @@
         type="button"
         onclick={() => handleAiToggle()}
         class="fixed bottom-20 right-4 md:bottom-5 md:right-5 z-40 flex items-center gap-2 px-3.5 py-2 rounded-full bg-neutral-900/90 hover:bg-neutral-800 text-neutral-100 border border-neutral-700/80 shadow-2xl shadow-black/60 hover:scale-105 active:scale-95 transition-all text-xs font-semibold cursor-pointer group"
-        title={"AI Copilot (CAFramework Assistant)"}
+        title={"AI Copilot (CATable Assistant)"}
         aria-label={"Open AI Copilot"}
       >
         <svg class="w-4 h-4 text-rose-500 group-hover:rotate-12 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

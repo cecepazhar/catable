@@ -2,7 +2,7 @@
   import { getAmbientStore, type AmbientMode, type AmbientEffect } from '$lib/stores/ambient.svelte';
   import { getPro } from '$lib/stores/pro.svelte';
 
-  let { defaultAccent = '#64748b', appName = 'CAFramework' }: { defaultAccent?: string; appName?: string } = $props();
+  let { defaultAccent = '#3b82f6', appName = 'CATable' }: { defaultAccent?: string; appName?: string } = $props();
 
   const ambient = getAmbientStore();
   const pro = getPro();

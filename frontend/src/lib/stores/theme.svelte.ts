@@ -2,7 +2,7 @@
 
 export type ThemeName = 'dark' | 'light';
 
-const STORAGE_KEY = 'caframework-theme';
+const STORAGE_KEY = 'catable-theme';
 
 const state = $state<{ name: ThemeName }>({ name: 'dark' });
 
@@ -34,7 +34,7 @@ export function toggleTheme() {
   setTheme(state.name === 'dark' ? 'light' : 'dark');
 }
 
-/** Reads the saved choice once at startup. Defaults to dark, as CAFramework always has. */
+/** Reads the saved choice once at startup. Defaults to dark, as CATable always has. */
 export function initTheme() {
   let saved: string | null = null;
   try {

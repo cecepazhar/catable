@@ -18,7 +18,7 @@
   let showConfirmClear = $state(false);
   let aiDisabledWarning = $state(false);
 
-  const initialGreeting = 'Halo! Saya asisten AI CAFramework. Ada yang bisa saya bantu dengan aplikasi, navigasi, atau konfigurasi data Anda?';
+  const initialGreeting = 'Halo! Saya asisten AI CATable. Ada yang bisa saya bantu dengan aplikasi, navigasi, atau konfigurasi data Anda?';
 
   let messages = $state<AiChatMessage[]>([
     {
@@ -193,7 +193,7 @@
     class="fixed z-50 flex flex-col bg-neutral-900/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl shadow-2xl shadow-black/80 overflow-hidden transition-all duration-200 {isFullHeight
       ? 'top-[calc(3.5rem+env(safe-area-inset-top,0px))] bottom-3 right-3 w-[420px]'
       : 'bottom-4 right-4 w-[390px] h-[520px] max-h-[calc(100vh-4.5rem-env(safe-area-inset-top,0px))]'}"
-    aria-label={"Asisten AI CAFramework"}
+    aria-label={"Asisten AI CATable"}
   >
     <!-- Header -->
     <header class="px-4 py-3 border-b border-neutral-800/80 bg-neutral-950/60 flex items-center justify-between select-none shrink-0">

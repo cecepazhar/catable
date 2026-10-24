@@ -5,6 +5,7 @@
   import { navItems } from '$lib/navItems';
 
   const palette = getPalette();
+  let { onLock }: { onLock?: () => void } = $props();
   let query = $state('');
   let selectedIndex = $state(0);
 

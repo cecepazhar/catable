@@ -49,4 +49,21 @@ impl ConnectionConfig {
     pub fn is_production(&self) -> bool {
         matches!(self.environment, Environment::Production)
     }
+
+    /// Returns the effective TCP port for this connection, resolving default
+    /// ports when port is 0:
+    /// - PostgreSQL: 5432
+    /// - MySQL / MariaDB: 3306
+    /// - Redis: 6379
+    pub fn effective_port(&self) -> u16 {
+        if self.port != 0 {
+            return self.port;
+        }
+        match self.driver {
+            DriverKind::Postgres => 5432,
+            DriverKind::Mysql | DriverKind::MariaDb => 3306,
+            DriverKind::Redis => 6379,
+            _ => 0,
+        }
+    }
 }
