@@ -314,10 +314,10 @@ impl DriverRegistry {
                 message: e.to_string(),
             })?;
         if let Some(pw) = &conn.password {
-            b.password(pw);
+            b.password(pw.as_str());
         }
         if !conn.user.is_empty() {
-            b.username(&conn.user);
+            b.username(conn.user.as_str());
         }
         Ok(b)
     }
@@ -340,7 +340,7 @@ impl DriverRegistry {
         let addr = format!("redis://{}:{}", conn.host, conn.effective_port());
 
         match Self::redis_paired(conn).await {
-            Ok(client) => match client.send(redis_cmd(&["PING"])).await {
+            Ok(client) => match client.send::<redis_async::resp::RespValue>(redis_cmd(&["PING"])).await {
                 Ok(_) => ConnectionTestResult {
                     success: true,
                     server_version: "Redis (PING OK)".into(),
@@ -413,7 +413,7 @@ impl DriverRegistry {
     /// Sets a Redis key to a string value (SET command).
     pub async fn set_redis_key(conn: &ConnectionConfig, key: &str, value: &str) -> Result<(), CatableError> {
         let client = Self::redis_paired(conn).await?;
-        client
+        let _: redis_async::resp::RespValue = client
             .send(redis_cmd(&["SET", key, value]))
             .await
             .map_err(|e| CatableError::Driver {
@@ -452,7 +452,7 @@ impl DriverRegistry {
         value: &str,
     ) -> Result<(), CatableError> {
         let client = Self::redis_paired(conn).await?;
-        client
+        let _: redis_async::resp::RespValue = client
             .send(redis_cmd(&["HSET", key, field, value]))
             .await
             .map_err(|e| CatableError::Driver {

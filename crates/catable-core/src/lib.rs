@@ -14,7 +14,7 @@ mod error;
 mod executor;
 mod guard;
 mod paths;
-mod vault;
+pub mod vault;
 pub mod ai;
 pub mod billing;
 pub mod db;
