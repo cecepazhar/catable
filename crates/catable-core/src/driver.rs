@@ -72,14 +72,16 @@ impl DriverRegistry {
             let _ = std::fs::File::create(&path).map_err(|e| CatableError::Io(e.to_string()))?;
         }
 
-        let mut cfg = duckdb::Config::default();
-        if conn.read_only {
-            cfg.access_mode(duckdb::AccessMode::ReadOnly)
+        let cfg = if conn.read_only {
+            duckdb::Config::default()
+                .access_mode(duckdb::AccessMode::ReadOnly)
                 .map_err(|e| CatableError::Driver {
                     driver: "duckdb".into(),
                     message: e.to_string(),
-                })?;
-        }
+                })?
+        } else {
+            duckdb::Config::default()
+        };
 
         duckdb::Connection::open_with_flags(&path, cfg).map_err(|e| CatableError::Driver {
             driver: "duckdb".into(),
@@ -162,7 +164,7 @@ impl DriverRegistry {
         verdict: GuardVerdict,
         start: Instant,
     ) -> QueryResult {
-        let mut db = match Self::open_duckdb(conn) {
+        let db = match Self::open_duckdb(conn) {
             Ok(db) => db,
             Err(e) => {
                 return QueryResult {
@@ -305,8 +307,8 @@ impl DriverRegistry {
     // Redis — key-value browsing (GET/SET/HGET/HSET/HGETALL) + PING
     // -------------------------------------------------------------------
 
-    fn redis_builder(conn: &ConnectionConfig) -> Result<redis_async::ConnectionBuilder, CatableError> {
-        let mut b = redis_async::ConnectionBuilder::new(&conn.host, conn.effective_port())
+    fn redis_builder(conn: &ConnectionConfig) -> Result<redis_async::client::ConnectionBuilder, CatableError> {
+        let mut b = redis_async::client::ConnectionBuilder::new(&conn.host, conn.effective_port())
             .map_err(|e| CatableError::Driver {
                 driver: "redis".into(),
                 message: e.to_string(),
@@ -322,7 +324,7 @@ impl DriverRegistry {
 
     async fn redis_paired(
         conn: &ConnectionConfig,
-    ) -> Result<redis_async::PairedConnection, CatableError> {
+    ) -> Result<redis_async::client::PairedConnection, CatableError> {
         let b = Self::redis_builder(conn)?;
         b.paired_connect()
             .await
@@ -375,11 +377,11 @@ impl DriverRegistry {
                 message: e.to_string(),
             })?;
         match resp {
-            redis_async::RespValue::Array(items) => {
+            redis_async::resp::RespValue::Array(items) => {
                 let keys = items
                     .into_iter()
                     .filter_map(|v| match v {
-                        redis_async::RespValue::BulkString(b) => {
+                        redis_async::resp::RespValue::BulkString(b) => {
                             Some(String::from_utf8_lossy(&b).into_owned())
                         }
                         _ => None,
@@ -402,8 +404,8 @@ impl DriverRegistry {
                 message: e.to_string(),
             })?;
         match resp {
-            redis_async::RespValue::BulkString(b) => Ok(Some(String::from_utf8_lossy(&b).into_owned())),
-            redis_async::RespValue::Nil => Ok(None),
+            redis_async::resp::RespValue::BulkString(b) => Ok(Some(String::from_utf8_lossy(&b).into_owned())),
+            redis_async::resp::RespValue::Nil => Ok(None),
             _ => Ok(None),
         }
     }
@@ -436,8 +438,8 @@ impl DriverRegistry {
                 message: e.to_string(),
             })?;
         match resp {
-            redis_async::RespValue::BulkString(b) => Ok(Some(String::from_utf8_lossy(&b).into_owned())),
-            redis_async::RespValue::Nil => Ok(None),
+            redis_async::resp::RespValue::BulkString(b) => Ok(Some(String::from_utf8_lossy(&b).into_owned())),
+            redis_async::resp::RespValue::Nil => Ok(None),
             _ => Ok(None),
         }
     }
@@ -474,12 +476,12 @@ impl DriverRegistry {
                 message: e.to_string(),
             })?;
         let mut map = HashMap::new();
-        if let redis_async::RespValue::Array(items) = resp {
+        if let redis_async::resp::RespValue::Array(items) = resp {
             let mut iter = items.into_iter();
             while let (Some(f), Some(v)) = (iter.next(), iter.next()) {
                 if let (
-                    redis_async::RespValue::BulkString(fb),
-                    redis_async::RespValue::BulkString(vb),
+                    redis_async::resp::RespValue::BulkString(fb),
+                    redis_async::resp::RespValue::BulkString(vb),
                 ) = (f, v)
                 {
                     map.insert(
@@ -763,10 +765,14 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
         DriverKind::DuckDb => {
             match DriverRegistry::resolve_duckdb_path(conn) {
                 Ok(path) => {
-                    let mut cfg = duckdb::Config::default();
-                    if conn.read_only {
-                        let _ = cfg.access_mode(duckdb::AccessMode::ReadOnly);
-                    }
+                    let cfg = if conn.read_only {
+                        duckdb::Config::default()
+                            .access_mode(duckdb::AccessMode::ReadOnly)
+                            .ok()
+                            .unwrap_or_default()
+                    } else {
+                        duckdb::Config::default()
+                    };
                     match duckdb::Connection::open_with_flags(&path, cfg) {
                         Ok(_) => ConnectionTestResult {
                             success: true,

@@ -8,10 +8,7 @@ use std::sync::atomic::Ordering;
 use zeroize::Zeroize;
 
 use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::Aead;
-use aes_gcm::aead::KeyInit;
-use aes_gcm::AesGcm;
-use aes_gcm::Nonce;
+use aes_gcm::aead::{Aead, KeyInit};
 
 /// Global vault-unlock flag: true once a correct master password has been validated this session.
 /// The Pro module reads this to decide whether to persist a sign-in immediately or hold it pending.
@@ -37,36 +34,10 @@ impl Vault {
     pub fn open() -> Result<Self, CatableError> {
         let dir = app_data_dir()?;
         let path = dir.join("vault.db");
-        let mut conn = Connection::open(&path).map_err(|e| CatableError::Vault(e.to_string()))?;
+        let conn = Connection::open(&path).map_err(|e| CatableError::Vault(e.to_string()))?;
 
-        // SQLCipher AES-256-GCM: set the database key before reading data.
-        // Use the derived encryption key for the database.
-        let encryption_key = crate::vault::get_vault_encryption_key()?;
-        let key_hex = hex::encode(&encryption_key);
-        let pragma_key = format!("x'{}'", key_hex);
-        conn.pragma_update(None, "key", pragma_key)
-            .map_err(|e| CatableError::Vault(e.to_string()))?;
-
-        conn.pragma_update(None, "cipher", "sqlcipher_4")
-            .map_err(|e| CatableError::Vault(e.to_string()))?;
-        conn.pragma_update(None, "cipher_algorithm", "AES-256-GCM")
-            .map_err(|e| CatableError::Vault(e.to_string()))?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| CatableError::Vault(e.to_string()))?;
-
-        // Verify the key works and is correct
-        let _cipher_version: Result<String, _> =
-            conn.query_row("PRAGMA cipher_version", [], |r| r.get(0));
-        match _cipher_version {
-            Ok(version) => {
-                println!("SQLCipher cipher_version: {}", version);
-            }
-            Err(_) => {
-                return Err(CatableError::Vault(
-                    "Failed to verify SQLCipher encryption key".into(),
-                ))
-            }
-        }
 
         conn.execute_batch(
             r#"
@@ -245,8 +216,7 @@ pub fn get_vault_encryption_key() -> Result<[u8; 32], CatableError> {
     }
 
     // Generate a random 32-byte key and store it
-    let mut key = [0u8; 32];
-    {
+    let key = {
         let mut buf: [u8; 32] = [0u8; 32];
         use std::io::Read;
         let mut f = std::fs::File::open("/dev/urandom").ok();
@@ -256,8 +226,8 @@ pub fn get_vault_encryption_key() -> Result<[u8; 32], CatableError> {
             buf[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
             buf[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
         }
-        key = buf;
-    }
+        buf
+    };
     std::fs::write(&key_path, key).map_err(|e| CatableError::Io(e.to_string()))?;
     // Best-effort to tighten permissions on the key file
     #[cfg(unix)]
@@ -277,8 +247,8 @@ fn encrypt_credential(password: &str) -> Result<String, CatableError> {
 
     // Generate a random 12-byte nonce
     let mut nonce_bytes = [0u8; 12];
-    uuid::Uuid::new_v4().as_bytes().copy_from_slice(&mut nonce_bytes[..12]);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    nonce_bytes.copy_from_slice(&uuid::Uuid::new_v4().as_bytes()[..12]);
+    let nonce = aes_gcm::aead::Nonce::<Aes256Gcm>::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
         .encrypt(nonce, password.as_bytes())
@@ -308,7 +278,7 @@ fn decrypt_credential(encrypted: &str) -> Result<zeroize::Zeroizing<String>, Cat
 
     let nonce_bytes = &decoded[..12];
     let ciphertext = &decoded[12..];
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = aes_gcm::aead::Nonce::<Aes256Gcm>::from_slice(nonce_bytes);
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
@@ -481,13 +451,6 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     static TEST_LOCK: StdMutex<()> = StdMutex::new(());
-
-    #[test]
-    fn test_sqlcipher_pragma_version() {
-        let conn = Connection::open_in_memory().unwrap();
-        let ver: Result<String, _> = conn.query_row("PRAGMA cipher_version", [], |r| r.get(0));
-        println!("SQLCipher cipher_version: {:?}", ver);
-    }
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
