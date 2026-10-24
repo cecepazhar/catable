@@ -66,4 +66,16 @@ impl ConnectionConfig {
             _ => 0,
         }
     }
+
+    /// Securely wipes the in-memory credential buffer, zeroizing the
+    /// underlying plaintext bytes before clearing the field. Call this
+    /// after the driver has finished using the password so no plaintext
+    /// lingers on the heap.
+    pub fn zeroize_password(&mut self) {
+        use zeroize::Zeroize;
+        if let Some(ref mut pw) = self.password {
+            pw.zeroize();
+        }
+        self.password = None;
+    }
 }

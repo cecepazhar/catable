@@ -1,78 +1,101 @@
 <script lang="ts">
   import { dbStore, type QueryResult } from '$lib/stores/database.svelte';
   import { showToast } from '$lib/stores/uiNotifications.svelte';
+  import { aiChat, aiExplain, type AiExplainResponse } from '$lib/api/copilot';
 
   let prompt = $state('');
   let result = $state<QueryResult | null>(null);
   let isLoading = $state(false);
+  let isExplaining = $state(false);
   let responseText = $state('');
+  let currentSql = $state('');
+  let explainData = $state<AiExplainResponse | null>(null);
 
   const suggestions = [
     'Write a query to find top 5 products by revenue',
     'Show me all users and their total order amounts',
     'Find any duplicate emails in the users table',
-    'Generate an INSERT statement for a new user'
+    'Generate an INSERT statement for a new user with developer role'
   ];
 
   async function generateQuery() {
     if (!prompt.trim()) return;
     isLoading = true;
     responseText = '';
+    currentSql = '';
     result = null;
+    explainData = null;
 
     try {
-      // Simple local mock of the AI copilot
-      await new Promise((r) => setTimeout(r, 800));
+      // Connect to real 9Router (localhost:20128) or Ollama with dynamic schema prompt injection
+      const chatRes = await aiChat(prompt, dbStore.activeConnection);
+      responseText = chatRes.reply;
 
-      let suggestedSql = '';
-      const lowerPrompt = prompt.toLowerCase();
+      if (chatRes.sql) {
+        currentSql = chatRes.sql;
 
-      if (lowerPrompt.includes('revenue') || lowerPrompt.includes('top')) {
-        suggestedSql = `SELECT 
-    p.name AS product_name,
-    SUM(oi.quantity * oi.unit_price) AS total_revenue,
-    COUNT(DISTINCT oi.order_id) AS orders_count
-FROM order_items oi
-JOIN products p ON oi.product_id = p.id
-GROUP BY p.id
-ORDER BY total_revenue DESC
-LIMIT 5;`;
-        responseText = 'I analyzed your request to find top products by revenue. I joined order_items with products to sum up total sales. Please review the generated SQL below.';
-      } else if (lowerPrompt.includes('duplicate') || lowerPrompt.includes('email')) {
-        suggestedSql = `SELECT email, COUNT(*) AS occurrences
-FROM users
-GROUP BY email
-HAVING COUNT(*) > 1;`;
-        responseText = 'I wrote a query to group the users table by email to isolate any repeated entries.';
-      } else if (lowerPrompt.includes('insert')) {
-        suggestedSql = `INSERT INTO users (name, email, role) VALUES ('New User', 'newuser@example.com', 'developer');`;
-        responseText = 'I generated a standard INSERT statement for the users table.';
-      } else {
-        suggestedSql = `SELECT * FROM users LIMIT 10;`;
-        responseText = 'I could not parse specific intent, so here is a standard basic query.';
-      }
+        // Evaluate with safety guardrail
+        const guardVerdict = await dbStore.evaluateSafety(chatRes.sql);
+        if (guardVerdict.risk === 'blocked') {
+          showToast(`Generated query was blocked: ${guardVerdict.reason}`, 'error');
+        }
 
-      // Evaluate with guard
-      const guardVerdict = await dbStore.evaluateSafety(suggestedSql);
-      if (guardVerdict.risk === 'blocked') {
-        showToast(`The generated query was blocked: ${guardVerdict.reason}`, 'error');
-      }
-
-      const execRes = await dbStore.executeQuery(suggestedSql);
-      result = execRes;
-      if (execRes.error) {
-        responseText = `AI generated the SQL, but execution encountered a server error: ${execRes.error}`;
+        // Execute query on active database
+        const execRes = await dbStore.executeQuery(chatRes.sql);
+        result = execRes;
+        if (execRes.error) {
+          showToast(`Query execution error: ${execRes.error}`, 'error');
+        }
       }
     } catch (e: any) {
       showToast(e?.message || 'AI generation failed.', 'error');
+      responseText = `Failed to connect to AI Copilot: ${e?.message || e}. Ensure 9Router is active on localhost:20128 or Ollama is running.`;
     } finally {
       isLoading = false;
     }
   }
 
-  function applyToQuery() {
-    navigator.clipboard.writeText(result?.rows.length ? '' : '');
-    showToast('SQL copied to clipboard. Use it in SQL Studio to execute.', 'success');
+  async function handleExplain() {
+    if (!currentSql) return;
+    isExplaining = true;
+    try {
+      const exp = await aiExplain(currentSql, dbStore.activeConnection);
+      explainData = exp;
+      showToast('Query plan & index analysis ready.', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Explain query failed.', 'error');
+    } finally {
+      isExplaining = false;
+    }
+  }
+
+  async function executeCurrentSql() {
+    if (!currentSql) return;
+    isLoading = true;
+    try {
+      const guardVerdict = await dbStore.evaluateSafety(currentSql);
+      if (guardVerdict.risk === 'blocked') {
+        showToast(`Query blocked by guardrail: ${guardVerdict.reason}`, 'error');
+        return;
+      }
+      const execRes = await dbStore.executeQuery(currentSql);
+      result = execRes;
+      if (execRes.error) {
+        showToast(`Error: ${execRes.error}`, 'error');
+      } else {
+        showToast(`Executed in ${execRes.duration_ms}ms (${execRes.rows_affected} rows)`, 'success');
+      }
+    } catch (e: any) {
+      showToast(e?.message || 'Execution failed.', 'error');
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  function copySql() {
+    if (!currentSql) return;
+    navigator.clipboard.writeText(currentSql);
+    showToast('SQL copied to clipboard.', 'success');
   }
 </script>
 
@@ -80,7 +103,12 @@ HAVING COUNT(*) > 1;`;
   <div class="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3 shrink-0">
     <div class="flex items-center gap-3">
       <h2 class="text-sm font-bold text-neutral-900 dark:text-white">AI DBA Copilot</h2>
-      <span class="text-[10px] font-mono bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300 px-2 py-0.5 rounded">SCHEMA-AWARE</span>
+      <span class="text-[10px] font-mono bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300 px-2 py-0.5 rounded">
+        9ROUTER / OLLAMA
+      </span>
+      <span class="text-[10px] font-mono bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-300 px-2 py-0.5 rounded">
+        SCHEMA-INJECTED ({dbStore.activeConnection.name} • {dbStore.tables.length} tables)
+      </span>
     </div>
   </div>
 
@@ -97,43 +125,122 @@ HAVING COUNT(*) > 1;`;
       {/each}
     </div>
 
-    <!-- Prompt -->
+    <!-- Prompt Input -->
     <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-4 flex gap-3 items-center">
       <div class="flex-1">
         <textarea
           bind:value={prompt}
-          placeholder="Describe the SQL query you need in plain language..."
+          placeholder="Describe the query you need, ask for performance advice, or request schema changes..."
           rows={2}
-          class="w-full bg-transparent focus:outline-none text-xs text-neutral-900 dark:text-neutral-100 resize-none"
+          class="w-full bg-transparent focus:outline-none text-xs text-neutral-900 dark:text-neutral-100 resize-none font-sans"
         ></textarea>
       </div>
       <button
-        disabled={isLoading}
+        disabled={isLoading || !prompt.trim()}
         onclick={generateQuery}
         class="px-4 py-2 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-lg shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
       >
-        {isLoading ? 'Thinking…' : 'Generate SQL'}
+        {isLoading ? 'Reasoning…' : 'Generate SQL'}
       </button>
     </div>
 
     {#if isLoading}
       <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 flex items-center justify-center gap-3 text-xs text-neutral-500">
         <div class="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
-        AI is analyzing schema and generating query...
+        AI DBA is inspecting active schema ({dbStore.activeConnection.driver}) and formulating query...
       </div>
     {:else if responseText}
       <div class="space-y-4">
+        <!-- AI Response & Reasoning -->
         <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-4">
-          <div class="text-[10px] font-bold text-neutral-500 uppercase tracking-wider mb-2">AI Reasoning & Analysis</div>
-          <p class="text-xs text-neutral-700 dark:text-neutral-300 leading-relaxed">{responseText}</p>
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">AI Copilot Analysis</div>
+            {#if currentSql}
+              <div class="flex items-center gap-2">
+                <button
+                  disabled={isExplaining}
+                  onclick={handleExplain}
+                  class="text-[11px] font-medium text-purple-600 hover:text-purple-500 flex items-center gap-1 cursor-pointer"
+                >
+                  {isExplaining ? 'Analyzing plan…' : 'Explain SQL & Index Hints'}
+                </button>
+                <span class="text-neutral-300 dark:text-neutral-700">•</span>
+                <button
+                  onclick={copySql}
+                  class="text-[11px] font-medium text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 cursor-pointer"
+                >
+                  Copy SQL
+                </button>
+                <span class="text-neutral-300 dark:text-neutral-700">•</span>
+                <button
+                  onclick={executeCurrentSql}
+                  class="text-[11px] font-medium text-emerald-600 hover:text-emerald-500 cursor-pointer"
+                >
+                  Execute Query
+                </button>
+              </div>
+            {/if}
+          </div>
+          <p class="text-xs text-neutral-700 dark:text-neutral-300 leading-relaxed whitespace-pre-wrap">{responseText}</p>
         </div>
 
+        <!-- Generated SQL Card -->
+        {#if currentSql}
+          <div class="bg-neutral-950 border border-neutral-800 rounded-xl p-4 font-mono text-xs text-emerald-400 overflow-x-auto">
+            <div class="flex items-center justify-between pb-2 border-b border-neutral-800 text-[10px] text-neutral-400 font-sans font-medium uppercase mb-2">
+              <span>Generated SQL Statement</span>
+              <button onclick={copySql} class="hover:text-white cursor-pointer">Copy</button>
+            </div>
+            <pre class="whitespace-pre">{currentSql}</pre>
+          </div>
+        {/if}
+
+        <!-- Explain & Index Advice -->
+        {#if explainData}
+          <div class="bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/40 rounded-xl p-4 space-y-3">
+            <div class="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider">
+              Query Execution Plan & Optimization
+            </div>
+            <p class="text-xs text-neutral-800 dark:text-neutral-200 leading-relaxed whitespace-pre-wrap">
+              {explainData.explanation}
+            </p>
+            {#if explainData.index_suggestions.length > 0}
+              <div class="pt-2 border-t border-purple-200 dark:border-purple-800/40">
+                <div class="text-[10px] font-semibold text-purple-700 dark:text-purple-300 uppercase mb-2">
+                  Suggested Index Optimizations:
+                </div>
+                <div class="space-y-1.5">
+                  {#each explainData.index_suggestions as hint}
+                    <div class="bg-white dark:bg-neutral-900 border border-purple-100 dark:border-purple-900/60 p-2 rounded text-xs font-mono text-purple-600 dark:text-purple-400 flex items-center justify-between">
+                      <span>{hint}</span>
+                      <button
+                        onclick={() => {
+                          navigator.clipboard.writeText(hint);
+                          showToast('Index statement copied.', 'success');
+                        }}
+                        class="text-[10px] text-neutral-400 hover:text-neutral-100 cursor-pointer uppercase font-sans"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Execution Results -->
         {#if result && result.columns.length > 0}
           <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-4">
-            <div class="text-[10px] font-bold text-neutral-500 uppercase tracking-wider mb-2">Query Results</div>
-            <div class="overflow-x-auto">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">
+                Execution Results ({result.rows_affected} rows • {result.duration_ms}ms)
+              </div>
+            </div>
+            <div class="overflow-x-auto max-h-60 overflow-y-auto">
               <table class="w-full text-left text-xs border-collapse">
-                <thead class="bg-neutral-50 dark:bg-neutral-800/60 text-neutral-500 uppercase text-[10px] tracking-wider border-b border-neutral-200 dark:border-neutral-800">
+                <thead class="bg-neutral-50 dark:bg-neutral-800/60 text-neutral-500 uppercase text-[10px] tracking-wider border-b border-neutral-200 dark:border-neutral-800 sticky top-0">
                   <tr>
                     {#each result.columns as col}
                       <th class="py-2 px-3 font-semibold">{col}</th>

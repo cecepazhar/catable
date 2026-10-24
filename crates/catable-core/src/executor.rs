@@ -155,7 +155,7 @@ impl QueryExecutor {
 
     /// Tests a database connection asynchronously.
     pub async fn test_connection_async(conn: &ConnectionConfig) -> ConnectionTestResult {
-        test_connection_impl(conn).await
+        crate::driver::test_connection(conn).await
     }
 
     /// Tests a database connection synchronously.
@@ -170,10 +170,7 @@ impl QueryExecutor {
             DriverKind::Sqlite => Self::list_tables_sqlite(conn),
             DriverKind::Postgres => list_tables_postgres(conn).await,
             DriverKind::Mysql | DriverKind::MariaDb => list_tables_mysql(conn).await,
-            DriverKind::DuckDb => Err(CatableError::Driver {
-                driver: "duckdb".into(),
-                message: "DuckDB driver not supported in this build".into(),
-            }),
+            DriverKind::DuckDb => crate::driver::DriverRegistry::list_tables_duckdb(conn).await,
             DriverKind::Redis => Err(CatableError::Driver {
                 driver: "redis".into(),
                 message: "Redis key-value store does not have relational tables.".into(),
@@ -212,14 +209,9 @@ impl QueryExecutor {
             DriverKind::Mysql | DriverKind::MariaDb => {
                 execute_query_mysql(conn, sql, verdict, start).await
             }
-            DriverKind::DuckDb => QueryResult {
-                columns: vec![],
-                rows: vec![],
-                rows_affected: 0,
-                duration_ms: start.elapsed().as_millis() as u64,
-                error: Some("DuckDB driver not supported in this build".into()),
-                guard_verdict: Some(verdict),
-            },
+            DriverKind::DuckDb => {
+                crate::driver::DriverRegistry::execute_query_duckdb(conn, sql, verdict, start).await
+            }
             DriverKind::Redis => QueryResult {
                 columns: vec![],
                 rows: vec![],
@@ -435,145 +427,7 @@ impl QueryExecutor {
     }
 }
 
-async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
-    let start = Instant::now();
-    match conn.driver {
-        DriverKind::Sqlite => match QueryExecutor::resolve_sqlite_path(conn) {
-            Ok(path) => match Connection::open(&path) {
-                Ok(sqlite_conn) => {
-                    let ver: String = sqlite_conn
-                        .query_row("SELECT sqlite_version()", [], |r| r.get(0))
-                        .unwrap_or_else(|_| "3.x".into());
-                    let latency = start.elapsed().as_millis() as u64;
-                    ConnectionTestResult {
-                        success: true,
-                        server_version: format!("SQLite v{}", ver),
-                        latency_ms: latency,
-                        message: format!(
-                            "Successfully verified SQLite database at {:?}",
-                            path.file_name().unwrap_or_default()
-                        ),
-                    }
-                }
-                Err(e) => ConnectionTestResult {
-                    success: false,
-                    server_version: "Unknown".into(),
-                    latency_ms: start.elapsed().as_millis() as u64,
-                    message: format!("SQLite open failed: {}", e),
-                },
-            },
-            Err(e) => ConnectionTestResult {
-                success: false,
-                server_version: "Unknown".into(),
-                latency_ms: start.elapsed().as_millis() as u64,
-                message: format!("Path resolution failed: {}", e),
-            },
-        },
-        DriverKind::Postgres => match connect_postgres(conn).await {
-            Ok(client) => match client.query_one("SELECT version()", &[]).await {
-                Ok(row) => {
-                    let version_str: String = row.get(0);
-                    let latency = start.elapsed().as_millis() as u64;
-                    ConnectionTestResult {
-                        success: true,
-                        server_version: version_str,
-                        latency_ms: latency,
-                        message: format!(
-                            "Successfully connected to PostgreSQL at {}:{}",
-                            conn.host,
-                            conn.effective_port()
-                        ),
-                    }
-                }
-                Err(e) => ConnectionTestResult {
-                    success: false,
-                    server_version: "Unknown".into(),
-                    latency_ms: start.elapsed().as_millis() as u64,
-                    message: format!("PostgreSQL handshake query failed: {}", e),
-                },
-            },
-            Err(e) => ConnectionTestResult {
-                success: false,
-                server_version: "Unknown".into(),
-                latency_ms: start.elapsed().as_millis() as u64,
-                message: format!("PostgreSQL connection failed: {}", e),
-            },
-        },
-        DriverKind::Mysql | DriverKind::MariaDb => match connect_mysql(conn).await {
-            Ok(mut mysql_conn) => {
-                use mysql_async::prelude::Queryable;
-                match mysql_conn
-                    .query_first::<String, _>("SELECT version()")
-                    .await
-                {
-                    Ok(Some(ver)) => {
-                        let latency = start.elapsed().as_millis() as u64;
-                        let kind = if conn.driver == DriverKind::MariaDb {
-                            "MariaDB"
-                        } else {
-                            "MySQL"
-                        };
-                        ConnectionTestResult {
-                            success: true,
-                            server_version: format!("{} v{}", kind, ver),
-                            latency_ms: latency,
-                            message: format!(
-                                "Successfully connected to {} at {}:{}",
-                                kind,
-                                conn.host,
-                                conn.effective_port()
-                            ),
-                        }
-                    }
-                    Ok(None) => ConnectionTestResult {
-                        success: true,
-                        server_version: "MySQL / MariaDB".into(),
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        message: format!(
-                            "Connected to MySQL at {}:{}",
-                            conn.host,
-                            conn.effective_port()
-                        ),
-                    },
-                    Err(e) => ConnectionTestResult {
-                        success: false,
-                        server_version: "Unknown".into(),
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        message: format!("MySQL handshake query failed: {}", e),
-                    },
-                }
-            }
-            Err(e) => ConnectionTestResult {
-                success: false,
-                server_version: "Unknown".into(),
-                latency_ms: start.elapsed().as_millis() as u64,
-                message: format!("MySQL connection failed: {}", e),
-            },
-        },
-        DriverKind::DuckDb => {
-            let latency = start.elapsed().as_millis() as u64;
-            ConnectionTestResult {
-                success: true,
-                server_version: "DuckDB v1.1.0".into(),
-                latency_ms: latency + 5,
-                message: "DuckDB local storage engine ready.".into(),
-            }
-        }
-        DriverKind::Redis => {
-            let latency = start.elapsed().as_millis() as u64;
-            ConnectionTestResult {
-                success: !conn.host.is_empty(),
-                server_version: "Redis / Valkey 7.2".into(),
-                latency_ms: latency + 8,
-                message: format!(
-                    "Redis server target endpoint at {}:{}",
-                    conn.host,
-                    conn.effective_port()
-                ),
-            }
-        }
-    }
-}
+
 
 // ---------------------------------------------------------------------------
 // PostgreSQL Implementation

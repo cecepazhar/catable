@@ -4,6 +4,7 @@
   import { dbStore, type ConnectionConfig, DEFAULT_SANDBOX_CONNECTION } from '$lib/stores/database.svelte';
   import { showToast } from '$lib/stores/uiNotifications.svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { goto } from '$app/navigation';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import LoadingState from '$lib/components/LoadingState.svelte';
 
@@ -82,6 +83,26 @@
     }
   }
 
+  async function handleSaveAndConnect() {
+    if (!form.name.trim()) {
+      showToast('Connection label is required.', 'error');
+      return;
+    }
+    try {
+      // Ensure id exists for upsert
+      if (!form.id) {
+        form.id = 'conn-' + Date.now();
+      }
+      await dbStore.saveConnection(form);
+      dbStore.setActiveConnection(form);
+      isModalOpen = false;
+      showToast(`Connected to "${form.name}".`, 'success');
+      await goto('/table-browser');
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to save and connect.', 'error');
+    }
+  }
+
   async function handleDelete(c: ConnectionConfig) {
     const ok = await confirm(`Delete connection "${c.name}"?`, 'Delete Connection', true, 'Delete', 'Cancel');
     if (!ok) return;
@@ -143,7 +164,7 @@
           class="group relative flex flex-col justify-between p-4 bg-white dark:bg-neutral-900/90 border border-neutral-200/90 dark:border-neutral-800 rounded-2xl shadow-2xs hover:shadow-md transition-all duration-150 space-y-3 cursor-pointer"
           onclick={() => {
             dbStore.setActiveConnection(conn);
-            activeSection = 'connections';
+            void goto('/table-browser');
           }}
         >
           <div class="flex items-start justify-between gap-2">
@@ -169,6 +190,17 @@
             </div>
 
             <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <button
+                onclick={(e) => {
+                  e.stopPropagation();
+                  dbStore.setActiveConnection(conn);
+                  void goto('/table-browser');
+                }}
+                class="p-1.5 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 text-neutral-400 hover:text-blue-500"
+                title="Manage"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 10h16M4 14h16M9 6v12M15 6v12" /></svg>
+              </button>
               <button
                 onclick={(e) => { e.stopPropagation(); editConn(conn); }}
                 class="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400"
@@ -302,13 +334,19 @@
         >
           {isTesting ? 'Testing…' : 'Test Connection'}
         </button>
-        <div class="flex gap-2">
+        <div class="flex items-center gap-2">
           <button onclick={() => (isModalOpen = false)} class="px-3.5 py-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-800 dark:hover:text-white rounded-lg transition-colors">Cancel</button>
           <button
             onclick={handleSave}
+            class="px-3.5 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200 border border-neutral-300 dark:border-neutral-700 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-800"
+          >
+            {editingId ? 'Update Connection' : 'Save Connection'}
+          </button>
+          <button
+            onclick={handleSaveAndConnect}
             class="px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors"
           >
-            {editingId ? 'Update Connection' : 'Add Connection'}
+            Save & Connect
           </button>
         </div>
       </div>

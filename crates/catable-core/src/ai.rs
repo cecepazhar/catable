@@ -208,50 +208,33 @@ fn call_llm(backend: &AiBackendConfig, req: &LlmRequest) -> Result<String, Catab
         )
     };
 
-    let body_str = body.to_string();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(120)))
+        .http_status_as_error(false)
+        .build()
+        .into();
 
-    let req_result = ureq::post(&url)
-        .timeout(std::time::Duration::from_secs(120))
-        .header("Content-Type", "application/json")
-        .set(
-            "Authorization",
-            &format!(
-                "Bearer {}",
-                backend.api_key.clone().unwrap_or_else(|| "no-key".into())
-            ),
-        )
-        .call();
+    let mut req = agent.post(&url).header("Content-Type", "application/json");
+    if let Some(ref key) = backend.api_key {
+        req = req.header("Authorization", &format!("Bearer {key}"));
+    }
 
-    let response = match req_result {
-        Ok(r) => r,
-        Err(ureq::Error::Transport(_)) => {
-            // Ollama sometimes ignores Bearer header — retry without auth
-            ureq::post(&url)
-                .timeout(std::time::Duration::from_secs(120))
-                .header("Content-Type", "application/json")
-                .call()
-                .map_err(|e| CatableError::Driver {
-                    driver: "ai".into(),
-                    message: format!("LLM endpoint unreachable: {e}"),
-                })?
-        }
-        Err(ureq::Error::Status(code, r)) => {
-            let text = r.into_string().unwrap_or_default();
-            return Err(CatableError::Driver {
-                driver: "ai".into(),
-                message: format!("LLM HTTP {code}: {text}"),
-            });
-        }
-    };
-
-    let text: String = response
-        .into_string()
-        .map_err(|e| {
-            CatableError::Driver {
-                driver: "ai".into(),
-                message: format!("Failed to read LLM response body: {e}"),
-            }
+    let mut response = req
+        .send_json(body)
+        .map_err(|e| CatableError::Driver {
+            driver: "ai".into(),
+            message: format!("LLM request failed: {e}"),
         })?;
+
+    let status = response.status().as_u16();
+    let text = response.body_mut().read_to_string().unwrap_or_default();
+
+    if status >= 400 {
+        return Err(CatableError::Driver {
+            driver: "ai".into(),
+            message: format!("LLM HTTP {status}: {text}"),
+        });
+    }
 
     // Ollama returns `message.content`; OpenAI returns `choices[0].message.content`
     let val: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
