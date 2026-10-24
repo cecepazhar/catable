@@ -1,12 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { dbStore, type QueryResult } from '$lib/stores/database.svelte';
+  import { showToast } from '$lib/stores/uiNotifications.svelte';
+  import { goto } from '$app/navigation';
   import LoadingState from '$lib/components/LoadingState.svelte';
+  import RowDetailsInspector from '$lib/components/RowDetailsInspector.svelte';
 
   const PAGE_SIZE = 50;
   let offset = $state(0);
   let previewResult = $state<QueryResult | null>(null);
   let isPreviewLoading = $state(false);
+  let selectedRow = $state<any[] | null>(null);
+  let selectedRowIndex = $state<number>(-1);
+  let inspectorOpen = $state(false);
 
   const activeTableInfo = $derived(
     dbStore.tables.find((t) => t.name === dbStore.activeTable)
@@ -19,6 +25,8 @@
     await dbStore.loadTables();
     if (dbStore.activeTable) {
       void fetchTableData(dbStore.activeTable, 0);
+    } else if (dbStore.tables.length > 0) {
+      handleTableSelect(dbStore.tables[0].name);
     }
   });
 
@@ -67,6 +75,30 @@
       void fetchTableData(dbStore.activeTable, lastOffset);
     }
   }
+
+  function handleRowClick(row: any[], index: number) {
+    selectedRow = row;
+    selectedRowIndex = index;
+    inspectorOpen = true;
+  }
+
+  function closeInspector() {
+    inspectorOpen = false;
+  }
+
+  function openInSqlStudio() {
+    const tableName = dbStore.activeTable;
+    if (!tableName) return;
+    const escapedName = `"${tableName.replace(/"/g, '""')}"`;
+    const sql = `SELECT * FROM ${escapedName} LIMIT 50;`;
+    void goto(`/sql-studio?query=${encodeURIComponent(sql)}`);
+  }
+
+  const columnTypes = $derived(
+    activeTableInfo
+      ? Object.fromEntries(activeTableInfo.columns.map((c) => [c.name, c.data_type || 'TEXT']))
+      : null
+  );
 </script>
 
 <div class="flex flex-col h-full overflow-hidden p-4 max-w-7xl mx-auto w-full space-y-4">
@@ -81,6 +113,22 @@
         <span class="text-[10px] font-mono text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-800 font-semibold">
           {activeTableInfo.name} ({totalRows.toLocaleString()} rows)
         </span>
+      {/if}
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="flex items-center gap-2">
+      {#if activeTableInfo}
+        <button
+          onclick={openInSqlStudio}
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors cursor-pointer"
+          title="Open this table in SQL Studio"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          </svg>
+          <span>Query in SQL Studio</span>
+        </button>
       {/if}
     </div>
   </div>
@@ -245,7 +293,10 @@
               </thead>
               <tbody class="divide-y divide-neutral-100 dark:divide-neutral-800/80">
                 {#each previewResult.rows as row, i}
-                  <tr class="hover:bg-neutral-50 dark:hover:bg-neutral-800/30 transition-colors">
+                  <tr
+                    class={`transition-colors cursor-pointer ${selectedRowIndex === i ? 'bg-blue-500/10 hover:bg-blue-500/15' : 'hover:bg-neutral-50 dark:hover:bg-neutral-800/30'}`}
+                    onclick={() => handleRowClick(row, i)}
+                  >
                     <td class="py-2 px-3 font-mono text-neutral-400 text-[10px] bg-neutral-50/50 dark:bg-neutral-800/20 text-right select-none">
                       {offset + i + 1}
                     </td>
@@ -270,5 +321,18 @@
         </div>
       </div>
     </div>
+
+    <!-- Row Details Inspector -->
+    <RowDetailsInspector
+      title="Row Details"
+      subtitle={activeTableInfo ? `${activeTableInfo.name} (${totalRows.toLocaleString()} rows)` : 'No table selected'}
+      columns={previewResult?.columns ?? []}
+      row={selectedRow}
+      rowIndex={selectedRowIndex >= 0 ? offset + selectedRowIndex + 1 : 0}
+      columnTypes={columnTypes}
+      isOpen={inspectorOpen}
+      onToggle={() => (inspectorOpen = true)}
+      onClose={closeInspector}
+    />
   </div>
 </div>

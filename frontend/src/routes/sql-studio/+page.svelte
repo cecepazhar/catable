@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import { dbStore, type QueryResult, type GuardVerdict, type TableInfo } from '$lib/stores/database.svelte';
   import { showToast, confirmModal } from '$lib/stores/uiNotifications.svelte';
+  import { page } from '$app/state';
   import LoadingState from '$lib/components/LoadingState.svelte';
+  import RowDetailsInspector from '$lib/components/RowDetailsInspector.svelte';
 
   let sqlQuery = $state('SELECT * FROM users LIMIT 10;');
   let isExecuting = $state(false);
@@ -11,6 +13,10 @@
   let verdict = $state<GuardVerdict | null>(null);
   let verdictIsLoading = $state(false);
   let confirmationPending = $state<{ verdict: GuardVerdict; sql: string } | null>(null);
+  let selectedRow = $state<any[] | null>(null);
+  let selectedRowIndex = $state<number>(-1);
+  let inspectorOpen = $state(false);
+  let initialQueryRun = $state(false);
 
   const RISK_STYLES: Record<string, { badge: string; label: string }> = {
     safe: {
@@ -57,7 +63,13 @@
 
   onMount(async () => {
     await dbStore.loadTables();
-    void refreshSafety(sqlQuery);
+    const queryParam = page.url.searchParams.get('query');
+    if (queryParam) {
+      sqlQuery = queryParam;
+      void runQuery(queryParam);
+    } else {
+      void refreshSafety(sqlQuery);
+    }
   });
 
   async function runQuery(sqlOverride?: string) {
@@ -65,6 +77,8 @@
     if (!sql) return;
     isExecuting = true;
     result = null;
+    selectedRow = null;
+    selectedRowIndex = -1;
     try {
       // First pass: guardrail check against the active connection
       const verdict = await dbStore.evaluateSafety(sql);
@@ -146,6 +160,16 @@
   function cellVal(v: any): string {
     if (v === null || v === undefined) return 'NULL';
     return String(v);
+  }
+
+  function handleRowClick(row: any[], index: number) {
+    selectedRow = row;
+    selectedRowIndex = index;
+    inspectorOpen = true;
+  }
+
+  function closeInspector() {
+    inspectorOpen = false;
   }
 </script>
 
@@ -289,7 +313,10 @@
               </thead>
               <tbody class="divide-y divide-neutral-100 dark:divide-neutral-800/80">
                 {#each result.rows as row, i}
-                  <tr class="hover:bg-neutral-50 dark:hover:bg-neutral-800/30 transition-colors">
+                  <tr
+                    class={`transition-colors cursor-pointer ${selectedRowIndex === i ? 'bg-blue-500/10 hover:bg-blue-500/15' : 'hover:bg-neutral-50 dark:hover:bg-neutral-800/30'}`}
+                    onclick={() => handleRowClick(row, i)}
+                  >
                     <td class="py-2 px-3 font-mono text-neutral-400 text-[10px] bg-neutral-50/50 dark:bg-neutral-800/20 text-right select-none">{i + 1}</td>
                     {#each row as val}
                       <td class="py-2 px-3 font-mono text-neutral-700 dark:text-neutral-300 whitespace-nowrap">
@@ -310,6 +337,18 @@
         </div>
       </div>
     </div>
+
+    <!-- Row Details Inspector -->
+    <RowDetailsInspector
+      title="Row Details"
+      subtitle={sqlQuery ? `SELECT query · ${result?.rows.length ?? 0} rows` : 'No query'}
+      columns={result?.columns ?? []}
+      row={selectedRow}
+      rowIndex={selectedRowIndex >= 0 ? selectedRowIndex + 1 : 0}
+      isOpen={inspectorOpen}
+      onToggle={() => (inspectorOpen = true)}
+      onClose={closeInspector}
+    />
   </div>
 
   <!-- Guardrail Confirmation Modal (non-dev environments) -->
