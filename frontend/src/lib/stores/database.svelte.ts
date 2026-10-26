@@ -3,6 +3,17 @@ import { invoke } from '@tauri-apps/api/core';
 export type DriverKind = 'sqlite' | 'postgres' | 'mysql' | 'mariadb' | 'duckdb' | 'redis';
 export type Environment = 'development' | 'staging' | 'production';
 
+export interface SshTunnelConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  user: string;
+  auth_type: 'password' | 'key' | 'agent';
+  key_path?: string | null;
+  key_passphrase?: string | null;
+  password?: string | null;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -14,6 +25,7 @@ export interface ConnectionConfig {
   user: string;
   password?: string | null;
   read_only: boolean;
+  ssh_tunnel?: SshTunnelConfig | null;
 }
 
 export interface TableColumnInfo {
@@ -62,6 +74,7 @@ export const DEFAULT_SANDBOX_CONNECTION: ConnectionConfig = {
   user: 'admin',
   password: null,
   read_only: false,
+  ssh_tunnel: null,
 };
 
 // Global reactive store for database operations
@@ -102,6 +115,10 @@ class DatabaseStore {
 
   async testConnection(cfg: ConnectionConfig): Promise<ConnectionTestResult> {
     return invoke<ConnectionTestResult>('test_database_connection', { config: cfg });
+  }
+
+  async testSshTunnel(config: SshTunnelConfig): Promise<{ success: boolean; message: string; latency_ms?: number }> {
+    return invoke<{ success: boolean; message: string; latency_ms?: number }>('test_ssh_tunnel', { config });
   }
 
   async loadTables() {
