@@ -166,6 +166,21 @@ impl QueryExecutor {
 
     /// Lists tables and columns for the connection asynchronously.
     pub async fn list_tables_async(conn: &ConnectionConfig) -> Result<Vec<TableInfo>, CatableError> {
+        let (effective_conn, _tunnel) = if conn.ssh_tunnel.as_ref().map_or(false, |t| t.enabled) {
+            match crate::tunnel::open_tunnel(conn) {
+                Ok(tun) => {
+                    let mut c = conn.clone();
+                    c.host = "127.0.0.1".into();
+                    c.port = tun.local_port();
+                    (c, Some(tun))
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            (conn.clone(), None)
+        };
+        let conn = &effective_conn;
+
         match conn.driver {
             DriverKind::Sqlite => Self::list_tables_sqlite(conn),
             DriverKind::Postgres => list_tables_postgres(conn).await,
@@ -202,6 +217,30 @@ impl QueryExecutor {
                 guard_verdict: Some(verdict),
             };
         }
+
+        let (effective_conn, _tunnel) = if conn.ssh_tunnel.as_ref().map_or(false, |t| t.enabled) {
+            match crate::tunnel::open_tunnel(conn) {
+                Ok(tun) => {
+                    let mut c = conn.clone();
+                    c.host = "127.0.0.1".into();
+                    c.port = tun.local_port();
+                    (c, Some(tun))
+                }
+                Err(e) => {
+                    return QueryResult {
+                        columns: vec![],
+                        rows: vec![],
+                        rows_affected: 0,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        error: Some(format!("SSH Tunnel failed: {}", e)),
+                        guard_verdict: Some(verdict),
+                    };
+                }
+            }
+        } else {
+            (conn.clone(), None)
+        };
+        let conn = &effective_conn;
 
         match conn.driver {
             DriverKind::Sqlite => Self::execute_query_sqlite(conn, sql, verdict, start),
@@ -1163,6 +1202,7 @@ mod tests {
             user: "".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         }
     }
 
@@ -1206,6 +1246,7 @@ mod tests {
             user: "postgres".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         };
         let res = QueryExecutor::execute_query_async(&conn, "SELECT 1").await;
         assert!(res.error.is_some());
@@ -1225,6 +1266,7 @@ mod tests {
             user: "root".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         };
         let res = QueryExecutor::execute_query_async(&conn, "SELECT 1").await;
         assert!(res.error.is_some());
@@ -1244,6 +1286,7 @@ mod tests {
             user: "admin".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         };
         // Unbounded DELETE on prod must be blocked instantly without network call
         let res = QueryExecutor::execute_query(&conn, "DELETE FROM customers");

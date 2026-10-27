@@ -14,6 +14,7 @@ mod error;
 mod executor;
 mod guard;
 mod paths;
+pub mod tunnel;
 pub mod vault;
 pub mod ai;
 pub mod billing;
@@ -24,11 +25,12 @@ pub use ai::{
     AiBackendConfig, AiChatRequest, AiChatResponse, AiDbaCopilot, AiExplainRequest,
     AiExplainResponse, SchemaContext,
 };
-pub use connection::{ConnectionConfig, DriverKind, Environment};
+pub use connection::{ConnectionConfig, DriverKind, Environment, SshAuthType, SshTunnelConfig};
 pub use driver::DriverRegistry;
 pub use error::{CatermError, CatableError};
 pub use executor::{ConnectionTestResult, QueryExecutor, QueryResult, TableInfo};
 pub use guard::{GuardVerdict, GuardrailEngine, QueryRisk};
+pub use tunnel::{open_tunnel, test_ssh_tunnel, TunnelSession};
 pub use vault::{
     change_master_password, is_vault_initialized, reset_vault, validate_vault_password,
     MIN_PASSWORD_LEN, Vault,

@@ -71,6 +71,20 @@ impl Vault {
                 .map_err(|e| CatableError::Vault(e.to_string()))?;
         }
 
+        // Ensure the ssh_tunnel column exists (migration)
+        let has_ssh_tunnel: bool = conn
+            .prepare("SELECT name FROM pragma_table_info('connections') WHERE name='ssh_tunnel'")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |r| r.get::<_, bool>(0))
+                    .map(|rows| rows.flatten().any(|row| row))
+            })
+            .unwrap_or(false);
+
+        if !has_ssh_tunnel {
+            conn.execute_batch("ALTER TABLE connections ADD COLUMN ssh_tunnel TEXT")
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+        }
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -96,10 +110,28 @@ impl Vault {
 
         let encrypted_password_param: Option<&str> = encrypted_password.as_deref();
 
+        let encrypted_ssh_tunnel = if let Some(ref ssh) = cfg.ssh_tunnel {
+            let mut ssh_to_store = ssh.clone();
+            if let Some(ref p) = ssh.password {
+                if !p.is_empty() {
+                    ssh_to_store.password = Some(encrypt_credential(p)?);
+                }
+            }
+            if let Some(ref p) = ssh.key_passphrase {
+                if !p.is_empty() {
+                    ssh_to_store.key_passphrase = Some(encrypt_credential(p)?);
+                }
+            }
+            Some(serde_json::to_string(&ssh_to_store).map_err(|e| CatableError::Serialization(e.to_string()))?)
+        } else {
+            None
+        };
+        let encrypted_ssh_tunnel_param: Option<&str> = encrypted_ssh_tunnel.as_deref();
+
         conn.execute(
             r#"
-            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 driver = excluded.driver,
@@ -109,7 +141,8 @@ impl Vault {
                 database = excluded.database,
                 user = excluded.user,
                 read_only = excluded.read_only,
-                encrypted_password = COALESCE(excluded.encrypted_password, connections.encrypted_password);
+                encrypted_password = COALESCE(excluded.encrypted_password, connections.encrypted_password),
+                ssh_tunnel = excluded.ssh_tunnel;
             "#,
             params![
                 cfg.id,
@@ -121,7 +154,8 @@ impl Vault {
                 cfg.database,
                 cfg.user,
                 if cfg.read_only { 1 } else { 0 },
-                encrypted_password_param
+                encrypted_password_param,
+                encrypted_ssh_tunnel_param
             ],
         )
         .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -135,7 +169,7 @@ impl Vault {
             .lock()
             .map_err(|e| CatableError::Vault(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password FROM connections ORDER BY name ASC")
+            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel FROM connections ORDER BY name ASC")
             .map_err(|e| CatableError::Vault(e.to_string()))?;
 
         let rows = stmt
@@ -144,6 +178,7 @@ impl Vault {
                 let env_s: String = r.get(3)?;
                 let read_only_int: i32 = r.get(8)?;
                 let enc_pw: Option<String> = r.get(9)?;
+                let enc_ssh: Option<String> = r.get(10)?;
 
                 let driver: DriverKind = serde_json::from_str(&format!("\"{}\"", driver_s))
                     .unwrap_or(DriverKind::Sqlite);
@@ -165,6 +200,28 @@ impl Vault {
                     _ => None,
                 };
 
+                // Decrypt ssh_tunnel if present
+                let ssh_tunnel = match enc_ssh.as_deref() {
+                    Some(s) if !s.trim().is_empty() => {
+                        if let Ok(mut tunnel_cfg) = serde_json::from_str::<crate::connection::SshTunnelConfig>(s) {
+                            if let Some(ref enc) = tunnel_cfg.password {
+                                if let Ok(dec) = decrypt_credential(enc) {
+                                    tunnel_cfg.password = Some((*dec).clone());
+                                }
+                            }
+                            if let Some(ref enc) = tunnel_cfg.key_passphrase {
+                                if let Ok(dec) = decrypt_credential(enc) {
+                                    tunnel_cfg.key_passphrase = Some((*dec).clone());
+                                }
+                            }
+                            Some(tunnel_cfg)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
                 Ok(ConnectionConfig {
                     id: r.get(0)?,
                     name: r.get(1)?,
@@ -176,6 +233,7 @@ impl Vault {
                     user: r.get(7)?,
                     password,
                     read_only: read_only_int != 0,
+                    ssh_tunnel,
                 })
             })
             .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -490,6 +548,7 @@ mod tests {
             user: "testuser".into(),
             password: Some("secretpass".into()),
             read_only: false,
+            ssh_tunnel: None,
         };
 
         vault.save_connection(&cfg).unwrap();
@@ -517,6 +576,7 @@ mod tests {
             user: "postgres".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         };
 
         vault.save_connection(&cfg).unwrap();

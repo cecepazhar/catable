@@ -19,6 +19,30 @@ pub enum DriverKind {
     Redis,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SshAuthType {
+    Password,
+    #[serde(rename = "key")]
+    PrivateKey,
+    Agent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshTunnelConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth_type: SshAuthType,
+    #[serde(default)]
+    pub key_path: Option<String>,
+    #[serde(default)]
+    pub key_passphrase: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
 /// Describes a saved database connection profile.
 ///
 /// `password` is only held in this struct during in-memory use; it is
@@ -40,6 +64,8 @@ pub struct ConnectionConfig {
     /// in the UI, so AI-generated queries cannot write to a read-only
     /// connection (PRD §3.5 "production-safe by default").
     pub read_only: bool,
+    #[serde(default)]
+    pub ssh_tunnel: Option<SshTunnelConfig>,
 }
 
 impl ConnectionConfig {

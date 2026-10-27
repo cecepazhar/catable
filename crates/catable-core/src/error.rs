@@ -150,4 +150,7 @@ pub enum CatableError {
 
     #[error("Serialization error: {0}")]
     Serialization(String),
+
+    #[error("Tunnel error: {0}")]
+    Tunnel(String),
 }

@@ -540,6 +540,29 @@ pub async fn test_connection(conn: &ConnectionConfig) -> ConnectionTestResult {
 
 async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
     let start = Instant::now();
+
+    let (effective_conn, _tunnel) = if conn.ssh_tunnel.as_ref().map_or(false, |t| t.enabled) {
+        match crate::tunnel::open_tunnel(conn) {
+            Ok(tun) => {
+                let mut c = conn.clone();
+                c.host = "127.0.0.1".into();
+                c.port = tun.local_port();
+                (c, Some(tun))
+            }
+            Err(e) => {
+                return ConnectionTestResult {
+                    success: false,
+                    server_version: "Unknown".into(),
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    message: format!("SSH Tunnel connection failed: {}", e),
+                };
+            }
+        }
+    } else {
+        (conn.clone(), None)
+    };
+    let conn = &effective_conn;
+
     match conn.driver {
         DriverKind::Sqlite => {
             match crate::executor::QueryExecutor::resolve_sqlite_path(conn) {
@@ -833,6 +856,7 @@ mod tests {
             user: "".into(),
             password: None,
             read_only,
+            ssh_tunnel: None,
         }
     }
 
@@ -923,6 +947,7 @@ mod tests {
             user: "".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         };
         let res = DriverRegistry::test_redis_ping(&conn).await;
         assert!(!res.success, "expected redis ping to fail: {}", res.message);
@@ -941,6 +966,7 @@ mod tests {
             user: "test".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         };
         let res = test_connection(&conn).await;
         assert!(!res.success);
@@ -963,6 +989,7 @@ mod tests {
             user: "test".into(),
             password: None,
             read_only: false,
+            ssh_tunnel: None,
         };
         let res = test_connection(&conn).await;
         assert!(!res.success);

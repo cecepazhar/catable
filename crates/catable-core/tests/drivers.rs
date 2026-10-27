@@ -23,6 +23,7 @@ fn pg_conn(read_only: bool) -> ConnectionConfig {
         user: "catable_user".into(),
         password: Some("secret".into()),
         read_only,
+        ssh_tunnel: None,
     }
 }
 
@@ -38,6 +39,7 @@ fn mysql_conn(read_only: bool) -> ConnectionConfig {
         user: "catable_user".into(),
         password: Some("catable_pass".into()),
         read_only,
+        ssh_tunnel: None,
     }
 }
 

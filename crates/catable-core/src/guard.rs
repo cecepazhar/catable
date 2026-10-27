@@ -119,6 +119,7 @@ mod tests {
             user: "".into(),
             password: None,
             read_only,
+            ssh_tunnel: None,
         }
     }
 

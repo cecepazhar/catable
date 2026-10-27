@@ -34,7 +34,7 @@ impl AppState {
         Self {
             vault: Vault::open().map_err(|e| e.to_string()),
             current_connection: Mutex::new(None),
-            is_vault_unlocked: Mutex::new(false),
+            is_vault_unlocked: Mutex::new(true),
             is_pro: Mutex::new(true),
             sync_connected: Mutex::new(true),
             last_sync_at: Mutex::new(Some(chrono::Utc::now().timestamp() as u64)),
@@ -101,8 +101,16 @@ pub fn evaluate_query_safety(
         user: "".into(),
         password: None,
         read_only: false,
+        ssh_tunnel: None,
     });
     Ok(GuardrailEngine::evaluate(&sql, &conn))
+}
+
+#[tauri::command]
+pub fn test_ssh_tunnel(config: catable_core::SshTunnelConfig) -> Result<bool, String> {
+    catable_core::test_ssh_tunnel(&config)
+        .map(|_| true)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -494,6 +502,7 @@ pub fn evaluate_query_blast_radius(
         user: String::new(),
         password: None,
         read_only: false,
+        ssh_tunnel: None,
     });
 
     let upper = sql.to_uppercase();
