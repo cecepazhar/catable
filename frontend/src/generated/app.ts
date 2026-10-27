@@ -5,7 +5,7 @@ export const APP_CONFIG = {
   slug: "catable",
   bundleId: "com.fathforce.catable",
   productName: "CATable",
-  version: "0.1.1",
+  version: "1.0.1",
   accentColor: "blue",
   errorPrefix: "CATABLE",
   description: "Modern, Lightweight, Native Multi-Driver Database Studio & AI-Powered SQL Client",

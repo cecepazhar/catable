@@ -11,6 +11,7 @@
   import { showToast } from '$lib/stores/uiNotifications.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import LoadingState from '$lib/components/LoadingState.svelte';
 
@@ -20,6 +21,8 @@
   let isTesting = $state(false);
   let testResult = $state<{ success: boolean; message: string } | null>(null);
   let activeSection = $state<'connections'>('connections');
+  let activeTab = $state<'general' | 'ssh' | 'advanced'>((page.url.searchParams.get('tab') as any) || 'general');
+  let showDbPassword = $state(false);
 
   // SSH Tunnel states
   let isSshAccordionOpen = $state(false);
@@ -30,6 +33,12 @@
 
   onMount(async () => {
     await dbStore.loadConnections();
+    if (page.url.searchParams.get('tab') === 'ssh' && form.ssh_tunnel) {
+      form.ssh_tunnel.enabled = true;
+      form.ssh_tunnel.host = 'bastion.example.com';
+      form.ssh_tunnel.user = 'ubuntu';
+      form.ssh_tunnel.key_path = '~/.ssh/id_ed25519';
+    }
   });
 
   const ENV_COLORS: Record<string, string> = {
@@ -678,7 +687,7 @@
   {/if}
 
   <!-- Bottom Actions Footer (Antares SQL Style) -->
-  <div class="mt-8 pt-4 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
+  <div class="mt-8 pt-4 pb-16 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
     <button
       type="button"
       onclick={handleTest}

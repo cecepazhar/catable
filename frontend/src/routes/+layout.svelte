@@ -236,7 +236,7 @@
       class="hidden md:flex flex-col shrink-0 border-r border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-[#121212] {isCollapsed ? 'w-14' : 'w-64'} transition-all duration-150"
       aria-label="Sidebar Navigasi Database"
     >
-      {#if !dbStore.isConnected || page.url.pathname === '/'}
+      {#if page.url.pathname === '/' || page.url.pathname === '/settings'}
         <!-- ============================================== -->
         <!-- ANTARES SQL STYLE: CONNECTION MANAGER SIDEBAR -->
         <!-- ============================================== -->
