@@ -51,37 +51,35 @@ impl Vault {
                 database    TEXT NOT NULL,
                 user        TEXT NOT NULL,
                 read_only   INTEGER NOT NULL DEFAULT 0,
-                encrypted_password TEXT
+                encrypted_password TEXT,
+                ssh_tunnel  TEXT,
+                group_name  TEXT
             );
             "#,
         )
         .map_err(|e| CatableError::Vault(e.to_string()))?;
 
-        // Ensure the encrypted_password column exists (migration)
-        let has_encrypted_password: bool = conn
-            .prepare("SELECT name FROM pragma_table_info('connections') WHERE name='encrypted_password'")
-            .and_then(|mut stmt| {
-                stmt.query_map([], |r| r.get::<_, bool>(0))
-                    .map(|rows| rows.flatten().any(|row| row))
-            })
-            .unwrap_or(false);
+        // Ensure columns exist (migration)
+        let column_exists = |col_name: &str| -> Result<bool, CatableError> {
+            let mut stmt = conn
+                .prepare("SELECT 1 FROM pragma_table_info('connections') WHERE name = ?1")
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+            stmt.exists(params![col_name])
+                .map_err(|e| CatableError::Vault(e.to_string()))
+        };
 
-        if !has_encrypted_password {
+        if !column_exists("encrypted_password")? {
             conn.execute_batch("ALTER TABLE connections ADD COLUMN encrypted_password TEXT")
                 .map_err(|e| CatableError::Vault(e.to_string()))?;
         }
 
-        // Ensure the ssh_tunnel column exists (migration)
-        let has_ssh_tunnel: bool = conn
-            .prepare("SELECT name FROM pragma_table_info('connections') WHERE name='ssh_tunnel'")
-            .and_then(|mut stmt| {
-                stmt.query_map([], |r| r.get::<_, bool>(0))
-                    .map(|rows| rows.flatten().any(|row| row))
-            })
-            .unwrap_or(false);
-
-        if !has_ssh_tunnel {
+        if !column_exists("ssh_tunnel")? {
             conn.execute_batch("ALTER TABLE connections ADD COLUMN ssh_tunnel TEXT")
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+        }
+
+        if !column_exists("group_name")? {
+            conn.execute_batch("ALTER TABLE connections ADD COLUMN group_name TEXT")
                 .map_err(|e| CatableError::Vault(e.to_string()))?;
         }
 
@@ -130,8 +128,8 @@ impl Vault {
 
         conn.execute(
             r#"
-            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 driver = excluded.driver,
@@ -142,7 +140,8 @@ impl Vault {
                 user = excluded.user,
                 read_only = excluded.read_only,
                 encrypted_password = COALESCE(excluded.encrypted_password, connections.encrypted_password),
-                ssh_tunnel = excluded.ssh_tunnel;
+                ssh_tunnel = excluded.ssh_tunnel,
+                group_name = excluded.group_name;
             "#,
             params![
                 cfg.id,
@@ -155,7 +154,8 @@ impl Vault {
                 cfg.user,
                 if cfg.read_only { 1 } else { 0 },
                 encrypted_password_param,
-                encrypted_ssh_tunnel_param
+                encrypted_ssh_tunnel_param,
+                cfg.group_name.as_deref()
             ],
         )
         .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -169,7 +169,7 @@ impl Vault {
             .lock()
             .map_err(|e| CatableError::Vault(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel FROM connections ORDER BY name ASC")
+            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name FROM connections ORDER BY name ASC")
             .map_err(|e| CatableError::Vault(e.to_string()))?;
 
         let rows = stmt
@@ -179,6 +179,7 @@ impl Vault {
                 let read_only_int: i32 = r.get(8)?;
                 let enc_pw: Option<String> = r.get(9)?;
                 let enc_ssh: Option<String> = r.get(10)?;
+                let group_name: Option<String> = r.get(11)?;
 
                 let driver: DriverKind = serde_json::from_str(&format!("\"{}\"", driver_s))
                     .unwrap_or(DriverKind::Sqlite);
@@ -234,6 +235,7 @@ impl Vault {
                     password,
                     read_only: read_only_int != 0,
                     ssh_tunnel,
+                    group_name,
                 })
             })
             .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -549,6 +551,7 @@ mod tests {
             password: Some("secretpass".into()),
             read_only: false,
             ssh_tunnel: None,
+            group_name: None,
         };
 
         vault.save_connection(&cfg).unwrap();
@@ -577,6 +580,7 @@ mod tests {
             password: None,
             read_only: false,
             ssh_tunnel: None,
+            group_name: None,
         };
 
         vault.save_connection(&cfg).unwrap();

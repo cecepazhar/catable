@@ -26,6 +26,7 @@ export interface ConnectionConfig {
   password?: string | null;
   read_only: boolean;
   ssh_tunnel?: SshTunnelConfig | null;
+  group_name?: string | null;
 }
 
 export interface TableColumnInfo {
@@ -75,6 +76,7 @@ export const DEFAULT_SANDBOX_CONNECTION: ConnectionConfig = {
   password: null,
   read_only: false,
   ssh_tunnel: null,
+  group_name: null,
 };
 
 // Global reactive store for database operations

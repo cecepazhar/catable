@@ -66,6 +66,8 @@ pub struct ConnectionConfig {
     pub read_only: bool,
     #[serde(default)]
     pub ssh_tunnel: Option<SshTunnelConfig>,
+    #[serde(default)]
+    pub group_name: Option<String>,
 }
 
 impl ConnectionConfig {

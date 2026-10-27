@@ -857,6 +857,7 @@ mod tests {
             password: None,
             read_only,
             ssh_tunnel: None,
+            group_name: None,
         }
     }
 
@@ -948,6 +949,7 @@ mod tests {
             password: None,
             read_only: false,
             ssh_tunnel: None,
+            group_name: None,
         };
         let res = DriverRegistry::test_redis_ping(&conn).await;
         assert!(!res.success, "expected redis ping to fail: {}", res.message);
@@ -967,6 +969,7 @@ mod tests {
             password: None,
             read_only: false,
             ssh_tunnel: None,
+            group_name: None,
         };
         let res = test_connection(&conn).await;
         assert!(!res.success);
@@ -990,6 +993,7 @@ mod tests {
             password: None,
             read_only: false,
             ssh_tunnel: None,
+            group_name: None,
         };
         let res = test_connection(&conn).await;
         assert!(!res.success);

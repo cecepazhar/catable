@@ -236,7 +236,7 @@
       class="hidden md:flex flex-col shrink-0 border-r border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-[#121212] {isCollapsed ? 'w-14' : 'w-64'} transition-all duration-150"
       aria-label="Sidebar Navigasi Database"
     >
-      {#if page.url.pathname === '/' || page.url.pathname === '/settings'}
+      {#if !dbStore.isConnected}
         <!-- ============================================== -->
         <!-- ANTARES SQL STYLE: CONNECTION MANAGER SIDEBAR -->
         <!-- ============================================== -->
@@ -283,6 +283,9 @@
               <div class="flex items-center justify-between gap-1 mb-1">
                 <span class="font-semibold text-xs text-neutral-900 dark:text-white truncate">{conn.name}</span>
                 <div class="flex items-center gap-1 shrink-0">
+                  {#if conn.group_name}
+                    <span class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-neutral-200/60 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400 truncate max-w-[70px]">{conn.group_name}</span>
+                  {/if}
                   {#if conn.ssh_tunnel?.enabled}
                     <span class="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-sky-500/10 text-sky-500 border border-sky-500/30">SSH</span>
                   {/if}

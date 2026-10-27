@@ -102,6 +102,7 @@ pub fn evaluate_query_safety(
         password: None,
         read_only: false,
         ssh_tunnel: None,
+        group_name: None,
     });
     Ok(GuardrailEngine::evaluate(&sql, &conn))
 }
@@ -503,6 +504,7 @@ pub fn evaluate_query_blast_radius(
         password: None,
         read_only: false,
         ssh_tunnel: None,
+        group_name: None,
     });
 
     let upper = sql.to_uppercase();
