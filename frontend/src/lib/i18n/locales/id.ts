@@ -889,7 +889,7 @@ const id: Dictionary = {
       profile: 'Profil',
       updates: 'Pembaruan',
       ai: 'Asisten AI',
-      subscription: 'Langganan',
+      subscription: 'Lisensi & Pro',
       security: 'Keamanan Vault',
       backup: 'Cadangkan & Pulihkan',
       shortcuts: 'Pintasan',

@@ -888,7 +888,7 @@ const en = {
       profile: 'Profile',
       updates: 'Updates',
       ai: 'AI Assistant',
-      subscription: 'Subscription',
+      subscription: 'License & Pro',
       security: 'Vault Security',
       backup: 'Backup & Restore',
       shortcuts: 'Shortcuts',
