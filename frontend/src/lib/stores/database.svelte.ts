@@ -81,6 +81,8 @@ export const DEFAULT_SANDBOX_CONNECTION: ConnectionConfig = {
 class DatabaseStore {
   connections = $state<ConnectionConfig[]>([DEFAULT_SANDBOX_CONNECTION]);
   activeConnection = $state<ConnectionConfig>(DEFAULT_SANDBOX_CONNECTION);
+  selectedConnectionId = $state<string | null>(null);
+  isConnected = $state<boolean>(false);
   tables = $state<TableInfo[]>([]);
   isLoading = $state(false);
   activeTable = $state<string | null>('users');
@@ -94,23 +96,32 @@ class DatabaseStore {
         if (!this.connections.some((c) => c.id === this.activeConnection.id)) {
           this.activeConnection = this.connections[0];
         }
+        if (!this.selectedConnectionId || !this.connections.some((c) => c.id === this.selectedConnectionId)) {
+          this.selectedConnectionId = this.activeConnection.id;
+        }
       } else {
         this.connections = [DEFAULT_SANDBOX_CONNECTION];
         this.activeConnection = DEFAULT_SANDBOX_CONNECTION;
+        this.selectedConnectionId = DEFAULT_SANDBOX_CONNECTION.id;
       }
     } catch {
       this.connections = [DEFAULT_SANDBOX_CONNECTION];
+      this.selectedConnectionId = DEFAULT_SANDBOX_CONNECTION.id;
     }
   }
 
   async saveConnection(cfg: ConnectionConfig) {
     await invoke('save_connection', { config: cfg });
     await this.loadConnections();
+    this.selectedConnectionId = cfg.id;
   }
 
   async deleteConnection(id: string) {
     await invoke('delete_connection', { id });
     await this.loadConnections();
+    if (this.selectedConnectionId === id) {
+      this.selectedConnectionId = this.connections[0]?.id || null;
+    }
   }
 
   async testConnection(cfg: ConnectionConfig): Promise<ConnectionTestResult> {
@@ -119,6 +130,17 @@ class DatabaseStore {
 
   async testSshTunnel(config: SshTunnelConfig): Promise<{ success: boolean; message: string; latency_ms?: number }> {
     return invoke<{ success: boolean; message: string; latency_ms?: number }>('test_ssh_tunnel', { config });
+  }
+
+  async connect(conn: ConnectionConfig) {
+    this.activeConnection = conn;
+    this.selectedConnectionId = conn.id;
+    this.isConnected = true;
+    await this.loadTables();
+  }
+
+  disconnect() {
+    this.isConnected = false;
   }
 
   async loadTables() {

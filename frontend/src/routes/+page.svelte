@@ -257,138 +257,461 @@
   }
 </script>
 
-<div class="flex flex-col h-full overflow-y-auto px-6 py-5 space-y-4 max-w-7xl mx-auto w-full">
-  <!-- Page Header -->
-  <div class="flex items-center justify-between">
+<div class="flex flex-col h-full overflow-y-auto p-6 md:p-8 max-w-5xl mx-auto w-full">
+  
+  <!-- Connection Header (Antares SQL Style) -->
+  <div class="flex items-center justify-between pb-4 border-b border-neutral-200 dark:border-neutral-800 shrink-0 mb-6">
     <div class="flex items-center gap-3">
-      <div class="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-950/60 border border-blue-200/80 dark:border-blue-800/60 flex items-center justify-center text-blue-600 dark:text-blue-400 font-mono font-bold text-xs shadow-2xs">
-        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 00-2 2v5a2 2 0 002 2h14a2 2 0 002-2v-5a2 2 0 00-2-2M5 12a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v5a2 2 0 01-2 2M5 12v5" />
-        </svg>
+      <div class="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800/60 flex items-center justify-center text-blue-600 dark:text-blue-400 font-mono font-bold text-sm shadow-xs">
+        {form.driver.slice(0, 2).toUpperCase()}
       </div>
       <div>
-        <h1 class="text-lg font-bold tracking-tight text-neutral-900 dark:text-neutral-100 leading-tight">Database Connections</h1>
-        <p class="text-[11px] text-neutral-500 dark:text-neutral-400">{dbStore.connections.length} connections saved in encrypted vault</p>
+        <div class="flex items-center gap-2">
+          <input
+            type="text"
+            bind:value={form.name}
+            placeholder="Connection Name"
+            class="text-base font-bold bg-transparent border-b border-transparent hover:border-neutral-300 dark:hover:border-neutral-700 focus:border-blue-500 focus:outline-none text-neutral-900 dark:text-white px-1 py-0.5 rounded transition-colors"
+          />
+          <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded border {ENV_COLORS[form.environment]}">
+            {form.environment}
+          </span>
+          {#if form.ssh_tunnel?.enabled}
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded border border-sky-500/30 text-sky-500 bg-sky-500/10 font-bold">
+              SSH TUNNEL
+            </span>
+          {/if}
+        </div>
+        <p class="text-xs text-neutral-500 dark:text-neutral-400 pl-1 mt-0.5">
+          {DRV_LABELS[form.driver]} · {isFileDriver(form.driver) ? form.database : `${form.user}@${form.host}:${form.port}`}
+        </p>
       </div>
     </div>
 
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        onclick={openAdd}
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors cursor-pointer"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
+        </svg>
+        <span>New Connection</span>
+      </button>
+      {#if form.id}
+        <button
+          type="button"
+          onclick={handleDelete}
+          class="text-xs text-rose-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 px-3 py-1.5 rounded-lg transition-colors cursor-pointer border border-rose-200 dark:border-rose-900/50"
+          title="Delete Connection"
+        >
+          Delete
+        </button>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Form Tabs: General, SSH Tunnel, Advanced -->
+  <div class="flex border-b border-neutral-200 dark:border-neutral-800 mb-6 gap-2">
     <button
-      onclick={openAdd}
-      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors cursor-pointer"
+      type="button"
+      onclick={() => (activeTab = 'general')}
+      class="px-4 py-2 text-xs font-semibold border-b-2 transition-colors cursor-pointer {activeTab === 'general' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'}"
     >
-      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
-      </svg>
-      <span>New Connection</span>
+      General
+    </button>
+    <button
+      type="button"
+      onclick={() => (activeTab = 'ssh')}
+      class="px-4 py-2 text-xs font-semibold border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 {activeTab === 'ssh' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'}"
+    >
+      <span>SSH Tunnel</span>
+      {#if form.ssh_tunnel?.enabled}
+        <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
+      {/if}
+    </button>
+    <button
+      type="button"
+      onclick={() => (activeTab = 'advanced')}
+      class="px-4 py-2 text-xs font-semibold border-b-2 transition-colors cursor-pointer {activeTab === 'advanced' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'}"
+    >
+      Advanced & Safety
     </button>
   </div>
 
-  <!-- Connections List -->
-  {#if dbStore.connections.length === 0}
-    <EmptyState
-      title="No Saved Connections"
-      description="Create a new database connection to start managing and querying data."
-      icon="connections"
-      actionLabel="New Connection"
-      onaction={openAdd}
-    />
-  {:else}
-    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 pt-1">
-      {#each dbStore.connections as conn (conn.id)}
-        <div
-          role="button"
-          tabindex="0"
-          class="group relative flex flex-col justify-between p-4 bg-white dark:bg-neutral-900/90 border border-neutral-200/90 dark:border-neutral-800 rounded-2xl shadow-2xs hover:shadow-md transition-all duration-150 space-y-3 cursor-pointer text-left"
-          onclick={() => {
-            dbStore.setActiveConnection(conn);
-            void goto('/table-browser');
-          }}
-          onkeydown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              dbStore.setActiveConnection(conn);
-              void goto('/table-browser');
-            }
-          }}
-        >
-          <div class="flex items-start justify-between gap-2">
-            <div class="flex items-center gap-3 min-w-0">
-              <div class="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
-                <svg class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 10c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-                </svg>
-              </div>
+  <!-- Tab Contents -->
+  <div class="flex-1 space-y-6">
+    
+    {#if activeTab === 'general'}
+      <!-- GENERAL TAB -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div class="space-y-1.5">
+          <label for="driver-select" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+            Driver Type
+          </label>
+          <select
+            id="driver-select"
+            value={form.driver}
+            onchange={handleDriverChange}
+            class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+          >
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL</option>
+            <option value="mariadb">MariaDB</option>
+            <option value="sqlite">SQLite / SQLCipher</option>
+            <option value="duckdb">DuckDB</option>
+            <option value="redis">Redis / Valkey</option>
+          </select>
+        </div>
 
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <h3 class="font-bold text-sm text-neutral-900 dark:text-neutral-100 truncate">{conn.name}</h3>
-                  {#if conn.id === dbStore.activeConnection.id}
-                    <span class="text-[9px] font-bold bg-blue-500 text-white rounded px-1.5 py-0.5 tracking-wider">ACTIVE</span>
-                  {/if}
-                </div>
-                <div class="flex items-center gap-2 mt-1 text-[10px] font-mono text-neutral-500 dark:text-neutral-400 flex-wrap">
-                  <span class="uppercase bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-700 dark:text-neutral-300">{DRV_LABELS[conn.driver]}</span>
-                  {#if conn.ssh_tunnel?.enabled}
-                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider text-[9px] bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20 shadow-2xs" title={`SSH Tunnel: ${conn.ssh_tunnel.user}@${conn.ssh_tunnel.host}:${conn.ssh_tunnel.port || 22}`}>
-                      <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                      </svg>
-                      SSH
-                    </span>
-                  {/if}
-                  <span class={`px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide ${ENV_COLORS[conn.environment]}`}>{conn.environment}</span>
-                </div>
-              </div>
-            </div>
+        <div class="space-y-1.5">
+          <label for="env-select" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+            Environment
+          </label>
+          <select
+            id="env-select"
+            bind:value={form.environment}
+            class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+          >
+            <option value="development">Development</option>
+            <option value="staging">Staging</option>
+            <option value="production">Production (Auto Read-Only)</option>
+          </select>
+        </div>
 
-            <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        {#if !isFileDriver(form.driver)}
+          <div class="space-y-1.5">
+            <label for="host-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+              Host / IP Address
+            </label>
+            <input
+              id="host-input"
+              type="text"
+              bind:value={form.host}
+              placeholder="127.0.0.1"
+              class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-neutral-900 dark:text-white"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <label for="port-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+              Port (Auto Default)
+            </label>
+            <input
+              id="port-input"
+              type="number"
+              bind:value={form.port}
+              class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-neutral-900 dark:text-white"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <label for="db-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+              Database Name
+            </label>
+            <input
+              id="db-input"
+              type="text"
+              bind:value={form.database}
+              placeholder="production_db"
+              class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <label for="user-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+              Username
+            </label>
+            <input
+              id="user-input"
+              type="text"
+              bind:value={form.user}
+              placeholder="root"
+              class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+            />
+          </div>
+
+          <div class="space-y-1.5 md:col-span-2">
+            <label for="pass-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+              Password (Encrypted in Vault)
+            </label>
+            <div class="relative">
+              <input
+                id="pass-input"
+                type={showDbPassword ? 'text' : 'password'}
+                bind:value={form.password}
+                placeholder="••••••••"
+                class="w-full pl-3 pr-10 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-neutral-900 dark:text-white"
+              />
               <button
-                onclick={(e) => {
-                  e.stopPropagation();
-                  dbStore.setActiveConnection(conn);
-                  void goto('/table-browser');
-                }}
-                class="p-1.5 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 text-neutral-400 hover:text-blue-500"
-                title="Manage"
-                aria-label="Manage connection"
+                type="button"
+                onclick={() => (showDbPassword = !showDbPassword)}
+                class="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 cursor-pointer"
+                aria-label={showDbPassword ? 'Hide password' : 'Show password'}
               >
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 10h16M4 14h16M9 6v12M15 6v12" /></svg>
-              </button>
-              <button
-                onclick={(e) => { e.stopPropagation(); editConn(conn); }}
-                class="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400"
-                title="Edit"
-                aria-label="Edit connection"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-              </button>
-              <button
-                onclick={(e) => { e.stopPropagation(); handleDelete(conn); }}
-                class="p-1.5 rounded hover:bg-rose-50 dark:hover:bg-rose-900/30 text-neutral-400 hover:text-rose-500"
-                title="Delete"
-                aria-label="Delete connection"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                {#if showDbPassword}
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /></svg>
+                {:else}
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                {/if}
               </button>
             </div>
           </div>
+        {:else}
+          <div class="space-y-1.5 md:col-span-2">
+            <label for="file-db-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+              Database File Path
+            </label>
+            <input
+              id="file-db-input"
+              type="text"
+              bind:value={form.database}
+              placeholder="/path/to/database.db or :memory:"
+              class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-neutral-900 dark:text-white"
+            />
+          </div>
+        {/if}
+      </div>
 
-          <div class="pt-2 border-t border-neutral-100 dark:border-neutral-800/80 text-[10px] font-mono text-neutral-500 dark:text-neutral-400 flex justify-between items-center">
-            <span class="truncate">
-              {isFileDriver(conn.driver) ? conn.database : `${conn.user}@${conn.host}:${conn.port}/${conn.database}`}
-            </span>
-            {#if conn.read_only}
-              <span class="text-amber-500 font-semibold flex items-center gap-1">
-                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-                Read-Only
-              </span>
+    {:else if activeTab === 'ssh'}
+      <!-- SSH TUNNEL TAB -->
+      <div class="space-y-5">
+        <div class="flex items-center justify-between p-4 bg-neutral-50 dark:bg-neutral-800/50 rounded-xl border border-neutral-200 dark:border-neutral-700/80">
+          <div>
+            <h4 class="text-xs font-bold text-neutral-900 dark:text-white">Use SSH Tunnel (Bastion / Jump Host)</h4>
+            <p class="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+              Securely connect to databases isolated inside private VPCs or behind firewalls.
+            </p>
+          </div>
+          <button
+            type="button"
+            onclick={toggleSshTunnel}
+            class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none {form.ssh_tunnel?.enabled ? 'bg-blue-600' : 'bg-neutral-300 dark:bg-neutral-700'}"
+            role="switch"
+            aria-checked={form.ssh_tunnel?.enabled}
+          >
+            <span class="inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out {form.ssh_tunnel?.enabled ? 'translate-x-5' : 'translate-x-0'}"></span>
+          </button>
+        </div>
+
+        {#if form.ssh_tunnel?.enabled}
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900/60">
+            <div class="space-y-1.5">
+              <label for="ssh-bastion-host" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+                SSH Bastion Host / IP
+              </label>
+              <input
+                id="ssh-bastion-host"
+                type="text"
+                bind:value={form.ssh_tunnel.host}
+                placeholder="bastion.example.com"
+                class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+              />
+            </div>
+
+            <div class="space-y-1.5">
+              <label for="ssh-bastion-port" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+                SSH Port
+              </label>
+              <input
+                id="ssh-bastion-port"
+                type="number"
+                bind:value={form.ssh_tunnel.port}
+                placeholder="22"
+                class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+              />
+            </div>
+
+            <div class="space-y-1.5">
+              <label for="ssh-bastion-user" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+                SSH Username
+              </label>
+              <input
+                id="ssh-bastion-user"
+                type="text"
+                bind:value={form.ssh_tunnel.user}
+                placeholder="ubuntu"
+                class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+              />
+            </div>
+
+            <div class="space-y-1.5">
+              <label for="ssh-auth-method" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+                Authentication Method
+              </label>
+              <select
+                id="ssh-auth-method"
+                bind:value={form.ssh_tunnel.auth_type}
+                class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+              >
+                <option value="key">Private Key File</option>
+                <option value="password">SSH Password</option>
+                <option value="agent">SSH Agent</option>
+              </select>
+            </div>
+
+            {#if form.ssh_tunnel.auth_type === 'key'}
+              <div class="space-y-1.5 md:col-span-2">
+                <label for="ssh-key-file" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+                  Private Key Path
+                </label>
+                <input
+                  id="ssh-key-file"
+                  type="text"
+                  bind:value={form.ssh_tunnel.key_path}
+                  placeholder="~/.ssh/id_ed25519"
+                  class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+                />
+              </div>
+
+              <div class="space-y-1.5 md:col-span-2">
+                <label for="ssh-key-pass" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+                  Key Passphrase (Optional)
+                </label>
+                <div class="relative">
+                  <input
+                    id="ssh-key-pass"
+                    type={showSshPassphrase ? 'text' : 'password'}
+                    bind:value={form.ssh_tunnel.key_passphrase}
+                    placeholder="••••••••"
+                    class="w-full pl-3 pr-10 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onclick={() => (showSshPassphrase = !showSshPassphrase)}
+                    class="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 cursor-pointer"
+                    aria-label={showSshPassphrase ? 'Hide passphrase' : 'Show passphrase'}
+                  >
+                    {#if showSshPassphrase}
+                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /></svg>
+                    {:else}
+                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                    {/if}
+                  </button>
+                </div>
+              </div>
+            {:else if form.ssh_tunnel.auth_type === 'password'}
+              <div class="space-y-1.5 md:col-span-2">
+                <label for="ssh-pass-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
+                  SSH Password
+                </label>
+                <div class="relative">
+                  <input
+                    id="ssh-pass-input"
+                    type={showSshPassword ? 'text' : 'password'}
+                    bind:value={form.ssh_tunnel.password}
+                    placeholder="••••••••"
+                    class="w-full pl-3 pr-10 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onclick={() => (showSshPassword = !showSshPassword)}
+                    class="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 cursor-pointer"
+                    aria-label={showSshPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {#if showSshPassword}
+                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" /></svg>
+                    {:else}
+                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                    {/if}
+                  </button>
+                </div>
+              </div>
+            {/if}
+
+            <div class="md:col-span-2 pt-2">
+              <button
+                type="button"
+                onclick={handleTestSsh}
+                disabled={isTestingSsh}
+                class="px-3.5 py-1.5 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50 cursor-pointer text-neutral-800 dark:text-neutral-200"
+              >
+                {isTestingSsh ? 'Testing Handshake...' : 'Test SSH Handshake'}
+              </button>
+            </div>
+
+            {#if sshTestResult}
+              <div class="md:col-span-2 p-3 rounded-lg text-xs font-medium border {sshTestResult.success ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300' : 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300'}">
+                <div class="font-bold">{sshTestResult.success ? 'SSH Handshake Verified ✓' : 'SSH Handshake Failed'}</div>
+                <div>{sshTestResult.message}</div>
+              </div>
             {/if}
           </div>
+        {/if}
+      </div>
+
+    {:else if activeTab === 'advanced'}
+      <!-- ADVANCED & SAFETY TAB -->
+      <div class="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/40">
+        <div class="flex items-center justify-between">
+          <div>
+            <h4 class="text-xs font-bold text-neutral-900 dark:text-white">Read-Only Mode</h4>
+            <p class="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+              Prevents destructive queries (DELETE, UPDATE, DROP) from being sent to this database.
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            bind:checked={form.read_only}
+            disabled={form.environment === 'production'}
+            class="h-4 w-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500"
+          />
         </div>
-      {/each}
+
+        {#if form.environment === 'production'}
+          <div class="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-rose-600 dark:text-rose-400 text-xs">
+            <strong>Production Safety Active:</strong> Connections marked as Production are automatically locked in READ-ONLY mode by CATable's internal guardrail engine.
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+  </div>
+
+  <!-- Real-time Test Result Feedback -->
+  {#if testResult}
+    <div class="mt-6 p-3 rounded-xl text-xs font-medium border {testResult.success ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300' : 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300'}">
+      <div class="font-bold">{testResult.success ? 'Database Connection Successful ✓' : 'Connection Failed'}</div>
+      <div class="mt-0.5 font-mono text-[11px]">{testResult.message}</div>
     </div>
   {/if}
+
+  <!-- Bottom Actions Footer (Antares SQL Style) -->
+  <div class="mt-8 pt-4 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
+    <button
+      type="button"
+      onclick={handleTest}
+      disabled={isTesting}
+      class="px-4 py-2 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50 cursor-pointer"
+    >
+      {isTesting ? 'Testing Connection...' : 'Test Connection'}
+    </button>
+
+    <div class="flex items-center gap-3">
+      <button
+        type="button"
+        onclick={handleSave}
+        class="px-4 py-2 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+      >
+        Save
+      </button>
+
+      <button
+        type="button"
+        onclick={handleSaveAndConnect}
+        class="flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-all cursor-pointer hover:shadow-md"
+      >
+        <span>Connect & Browse Tables</span>
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+        </svg>
+      </button>
+    </div>
+  </div>
+
 </div>
+
 
 <!-- Add/Edit Connection Modal -->
 {#if isModalOpen}
