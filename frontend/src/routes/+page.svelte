@@ -8,7 +8,7 @@
     type SshTunnelConfig,
     DEFAULT_SANDBOX_CONNECTION,
   } from '$lib/stores/database.svelte';
-  import { showToast } from '$lib/stores/uiNotifications.svelte';
+  import { showToast, confirmModal } from '$lib/stores/uiNotifications.svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { getAmbientStore } from '$lib/stores/ambient.svelte';
@@ -42,8 +42,48 @@
   let isTestingSsh = $state(false);
   let sshTestResult = $state<{ success: boolean; message: string; latency_ms?: number } | null>(null);
 
+  async function handleExportVault() {
+    try {
+      showToast('Exporting vault backup...', 'info');
+      const jsonStr = await invoke<string>('export_json_backup');
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `catable-vault-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      showToast('Vault backup exported successfully', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to export backup', 'error');
+    }
+  }
+
+  function handleImportVault() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const count = await invoke<number>('import_json_backup', { jsonStr: text });
+        showToast(`Restored ${count} connections/workspaces from backup`, 'success');
+        await dbStore.loadConnections();
+      } catch (e: any) {
+        showToast(e?.message || 'Failed to restore backup', 'error');
+      }
+    };
+    input.click();
+  }
+
   onMount(async () => {
     await dbStore.loadConnections();
+    const reqWs = page.url.searchParams.get('workspace');
+    if (reqWs) {
+      selectedWorkspace = reqWs;
+    }
     if (page.url.searchParams.get('action') === 'new') {
       openAdd();
     }
@@ -432,7 +472,13 @@
 
   async function handleDelete(c: ConnectionConfig) {
     if (!c || !c.id) return;
-    const ok = window.confirm(`Delete connection "${c.name}"?`);
+    const ok = await confirmModal(
+      `Delete connection "${c.name}"? This action cannot be undone.`,
+      'Delete Connection',
+      true,
+      'Delete',
+      'Cancel'
+    );
     if (!ok) return;
     try {
       await dbStore.deleteConnection(c.id);
@@ -525,17 +571,44 @@
         {/each}
       </div>
 
-      <!-- New Connection Button -->
-      <button
-        type="button"
-        onclick={openAdd}
-        class="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-all cursor-pointer hover:shadow-md shrink-0"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
-        </svg>
-        <span>New Connection</span>
-      </button>
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          onclick={handleImportVault}
+          class="px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition-colors flex items-center gap-1 cursor-pointer"
+          title="Import Backup from JSON"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+          <span class="hidden sm:inline">Import</span>
+        </button>
+
+        <button
+          type="button"
+          onclick={handleExportVault}
+          class="px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition-colors flex items-center gap-1 cursor-pointer"
+          title="Export Vault to JSON"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          <span class="hidden sm:inline">Backup</span>
+        </button>
+
+        <!-- New Connection Button -->
+        <button
+          type="button"
+          onclick={openAdd}
+          class="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-all cursor-pointer hover:shadow-md shrink-0"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
+          </svg>
+          <span>New Connection</span>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -581,6 +654,14 @@
         </span>
       </button>
     {/if}
+
+    <a
+      href="/groups"
+      class="ml-auto text-xs font-semibold text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors flex items-center gap-1 shrink-0 px-2.5 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-950/40"
+    >
+      <span>Manage Workspaces</span>
+      <span>→</span>
+    </a>
   </div>
 
   <!-- ============================================== -->

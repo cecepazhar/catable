@@ -119,7 +119,7 @@
     class="w-full flex items-center rounded-xl border transition-colors {collapsed ? 'justify-center p-1.5 border-transparent' : 'gap-2.5 p-2 border-neutral-200 dark:border-neutral-800'} {open ? 'bg-neutral-100 dark:bg-neutral-800/70' : 'hover:bg-neutral-100 dark:hover:bg-neutral-900'}"
   >
     <span class="relative shrink-0">
-      <ProfileAvatar avatar={profile.avatar} name={profile.name} size={collapsed ? 30 : 34} pro={profile.plan === 'pro'} />
+      <ProfileAvatar avatar={profile.avatar} name={profile.name} size={collapsed ? 30 : 34} pro={true} />
       <!-- Vault is unlocked whenever this menu is visible. -->
       <span class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#0e0e0e]"></span>
     </span>
@@ -127,8 +127,8 @@
       <span class="min-w-0 flex-1 text-left">
         <span class="flex items-center gap-1.5">
           <span class="text-[13px] font-semibold text-neutral-900 dark:text-white truncate">{profile.name}</span>
-          <span class="shrink-0 px-1.5 py-px rounded border border-neutral-300 dark:border-neutral-700 text-[9px] font-semibold tracking-wider text-neutral-500 dark:text-neutral-400">
-            {planLabel.toUpperCase()}
+          <span class="shrink-0 px-1.5 py-0.5 rounded font-black tracking-wider text-[9px] bg-amber-400 text-neutral-950 shadow-xs border border-amber-300">
+            PRO
           </span>
         </span>
         <span class="block text-[11px] font-mono text-neutral-500 dark:text-neutral-400 truncate">Local Encryption</span>

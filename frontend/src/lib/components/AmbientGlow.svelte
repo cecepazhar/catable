@@ -20,7 +20,7 @@
   );
 
   const glowBoxShadow = $derived.by(() => {
-    if (!ambient.config.enabled || !ambient.config.cardGlowEnabled || !pro.isPro) return 'none';
+    if (!ambient.config.enabled || !ambient.config.cardGlowEnabled) return 'none';
     if (isGradientMode) return 'none';
 
     const blur = ambient.config.blurRadius;
@@ -38,7 +38,7 @@
   const animationDuration = $derived(`${ambient.config.speedSec}s`);
 </script>
 
-{#if ambient.config.enabled && ambient.config.cardGlowEnabled && pro.isPro}
+{#if ambient.config.enabled && ambient.config.cardGlowEnabled}
   <div
     class="pointer-events-none absolute -inset-[2px] rounded-2xl md:rounded-none md:rounded-tl-xl z-0 overflow-visible transition-opacity duration-300 will-change-[filter,opacity]"
     style:opacity={ambient.config.intensity}

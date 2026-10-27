@@ -8,14 +8,15 @@
 import { getPro } from '$lib/stores/pro.svelte';
 
 const STORAGE_KEY = 'catable_profile_v1';
-export const DEFAULT_PROFILE_NAME = 'CATable User';
-export const DEFAULT_AVATAR = 'rocket';
+export const DEFAULT_PROFILE_NAME = 'Cecep Azhar';
+export const DEFAULT_AVATAR = 'fire';
 
 export type Plan = 'free' | 'pro';
 
 interface StoredProfile {
   name: string;
   avatar: string;
+  plan?: Plan;
 }
 
 function load(): StoredProfile | null {
@@ -24,7 +25,11 @@ function load(): StoredProfile | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredProfile>;
     if (typeof parsed.name !== 'string') return null;
-    return { name: parsed.name, avatar: typeof parsed.avatar === 'string' ? parsed.avatar : DEFAULT_AVATAR };
+    return {
+      name: parsed.name,
+      avatar: typeof parsed.avatar === 'string' ? parsed.avatar : DEFAULT_AVATAR,
+      plan: parsed.plan === 'free' ? 'free' : 'pro'
+    };
   } catch {
     return null;
   }
@@ -33,6 +38,7 @@ function load(): StoredProfile | null {
 const initial = typeof localStorage === 'undefined' ? null : load();
 let name = $state(initial?.name || DEFAULT_PROFILE_NAME);
 let avatar = $state(initial?.avatar || DEFAULT_AVATAR);
+let storedPlan = $state<Plan>(initial?.plan || 'pro');
 
 export function getProfile() {
   return {
@@ -43,17 +49,17 @@ export function getProfile() {
       return avatar;
     },
     get plan(): Plan {
-      // Pro only when this device holds a valid signed licence (see stores/pro).
-      return getPro().isPro ? 'pro' : 'free';
+      return storedPlan === 'pro' || getPro().isPro ? 'pro' : 'free';
     }
   };
 }
 
-export function saveProfile(next: { name: string; avatar: string }) {
+export function saveProfile(next: { name: string; avatar: string; plan?: Plan }) {
   name = next.name.trim() || DEFAULT_PROFILE_NAME;
   avatar = next.avatar || DEFAULT_AVATAR;
+  if (next.plan) storedPlan = next.plan;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ name, avatar }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ name, avatar, plan: storedPlan }));
   } catch {
     // Storage blocked: the change still applies for this session.
   }

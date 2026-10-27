@@ -1,9 +1,17 @@
-import { invoke_exportEncryptedBackup, invoke_importEncryptedBackup } from './generated_bindings';
+import { invoke } from '@tauri-apps/api/core';
 
-export function exportEncryptedBackup(password: string): Promise<number[]> {
-  return invoke_exportEncryptedBackup(password);
+export async function exportEncryptedBackup(password: string): Promise<number[]> {
+  return invoke<number[]>('export_encrypted_backup', { passphrase: password });
 }
 
-export function importEncryptedBackup(data: number[], password: string): Promise<void> {
-  return invoke_importEncryptedBackup(data, password);
+export async function importEncryptedBackup(data: number[], password: string): Promise<number> {
+  return invoke<number>('import_encrypted_backup', { data, passphrase: password });
+}
+
+export async function exportJsonBackup(): Promise<string> {
+  return invoke<string>('export_json_backup');
+}
+
+export async function importJsonBackup(jsonStr: string): Promise<number> {
+  return invoke<number>('import_json_backup', { jsonStr });
 }

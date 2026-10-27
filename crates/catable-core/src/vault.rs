@@ -2,6 +2,7 @@ use crate::connection::{ConnectionConfig, DriverKind, Environment};
 use crate::error::CatableError;
 use crate::paths::app_data_dir;
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -9,6 +10,32 @@ use zeroize::Zeroize;
 
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRecord {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub color: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultBackupPayload {
+    pub version: String,
+    pub timestamp: i64,
+    pub connections: Vec<ConnectionConfig>,
+    #[serde(default)]
+    pub workspaces: Vec<WorkspaceRecord>,
+}
 
 /// Global vault-unlock flag: true once a correct master password has been validated this session.
 /// The Pro module reads this to decide whether to persist a sign-in immediately or hold it pending.
@@ -54,6 +81,14 @@ impl Vault {
                 encrypted_password TEXT,
                 ssh_tunnel  TEXT,
                 group_name  TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL UNIQUE,
+                color       TEXT NOT NULL,
+                description TEXT,
+                created_at  INTEGER NOT NULL
             );
             "#,
         )
@@ -255,6 +290,233 @@ impl Vault {
         conn.execute("DELETE FROM connections WHERE id = ?1", params![id])
             .map_err(|e| CatableError::Vault(e.to_string()))?;
         Ok(())
+    }
+
+    pub fn list_workspaces(&self) -> Result<Vec<WorkspaceRecord>, CatableError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, color, description, created_at FROM workspaces ORDER BY created_at ASC")
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(WorkspaceRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    color: row.get(2)?,
+                    description: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        let mut workspaces = Vec::new();
+        for row in rows {
+            workspaces.push(row.map_err(|e| CatableError::Vault(e.to_string()))?);
+        }
+        Ok(workspaces)
+    }
+
+    pub fn save_workspace(&self, input: &WorkspaceInput) -> Result<WorkspaceRecord, CatableError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        let now = chrono::Utc::now().timestamp();
+        let id = input
+            .id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        let old_name: Option<String> = conn
+            .query_row(
+                "SELECT name FROM workspaces WHERE id = ?1",
+                params![&id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        conn.execute(
+            r#"
+            INSERT INTO workspaces (id, name, color, description, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                color = excluded.color,
+                description = excluded.description
+            "#,
+            params![&id, input.name.trim(), &input.color, &input.description, now],
+        )
+        .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        if let Some(old) = old_name {
+            if old != input.name.trim() {
+                let _ = conn.execute(
+                    "UPDATE connections SET group_name = ?1 WHERE group_name = ?2",
+                    params![input.name.trim(), old],
+                );
+            }
+        }
+
+        Ok(WorkspaceRecord {
+            id,
+            name: input.name.trim().to_string(),
+            color: input.color.clone(),
+            description: input.description.clone(),
+            created_at: now,
+        })
+    }
+
+    pub fn delete_workspace(&self, id: &str) -> Result<(), CatableError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        let name: Option<String> = conn
+            .query_row(
+                "SELECT name FROM workspaces WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        if let Some(wname) = name {
+            let _ = conn.execute(
+                "UPDATE connections SET group_name = NULL WHERE group_name = ?1",
+                params![wname],
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn export_encrypted_backup(&self, passphrase: &str) -> Result<Vec<u8>, CatableError> {
+        if passphrase.len() < MIN_PASSWORD_LEN {
+            return Err(CatableError::Vault(format!(
+                "Backup passphrase must be at least {} characters",
+                MIN_PASSWORD_LEN
+            )));
+        }
+
+        let connections = self.list_connections()?;
+        let workspaces = self.list_workspaces()?;
+        let now = chrono::Utc::now().timestamp();
+
+        let payload = VaultBackupPayload {
+            version: "1.0.1".to_string(),
+            timestamp: now,
+            connections,
+            workspaces,
+        };
+
+        let json_bytes = serde_json::to_vec(&payload)
+            .map_err(|e| CatableError::Serialization(e.to_string()))?;
+
+        // Derive 32-byte key using Argon2id
+        let mut derived_key = [0u8; 32];
+        let params = argon2::Params::new(64 * 1024, 3, 4, Some(32))
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        let argon2 = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+        let salt = b"catable.vault.backup.salt.2026";
+        argon2
+            .hash_password_into(passphrase.as_bytes(), salt, &mut derived_key)
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        // Encrypt with AES-256-GCM
+        let cipher = Aes256Gcm::new_from_slice(&derived_key)
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        let mut nonce_bytes = [0u8; 12];
+        nonce_bytes.copy_from_slice(&uuid::Uuid::new_v4().as_bytes()[..12]);
+        let nonce = aes_gcm::aead::Nonce::<Aes256Gcm>::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher
+            .encrypt(nonce, json_bytes.as_slice())
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(12 + ciphertext.len());
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        Ok(out)
+    }
+
+    pub fn import_encrypted_backup(&self, data: &[u8], passphrase: &str) -> Result<usize, CatableError> {
+        if data.len() < 12 {
+            return Err(CatableError::Vault("Encrypted backup payload is too short".into()));
+        }
+
+        let mut derived_key = [0u8; 32];
+        let params = argon2::Params::new(64 * 1024, 3, 4, Some(32))
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        let argon2 = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+        let salt = b"catable.vault.backup.salt.2026";
+        argon2
+            .hash_password_into(passphrase.as_bytes(), salt, &mut derived_key)
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        let cipher = Aes256Gcm::new_from_slice(&derived_key)
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        let nonce_bytes = &data[..12];
+        let ciphertext = &data[12..];
+        let nonce = aes_gcm::aead::Nonce::<Aes256Gcm>::from_slice(nonce_bytes);
+
+        let decrypted = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| CatableError::Vault(format!("Decryption failed: check passphrase or file integrity ({e})")))?;
+
+        let payload: VaultBackupPayload = serde_json::from_slice(&decrypted)
+            .map_err(|e| CatableError::Serialization(format!("Corrupt backup file: {e}")))?;
+
+        self.apply_backup_payload(payload)
+    }
+
+    pub fn export_json_backup(&self) -> Result<String, CatableError> {
+        let connections = self.list_connections()?;
+        let workspaces = self.list_workspaces()?;
+        let now = chrono::Utc::now().timestamp();
+
+        let payload = VaultBackupPayload {
+            version: "1.0.1".to_string(),
+            timestamp: now,
+            connections,
+            workspaces,
+        };
+
+        serde_json::to_string_pretty(&payload)
+            .map_err(|e| CatableError::Serialization(e.to_string()))
+    }
+
+    pub fn import_json_backup(&self, json_str: &str) -> Result<usize, CatableError> {
+        let payload: VaultBackupPayload = serde_json::from_str(json_str)
+            .map_err(|e| CatableError::Serialization(format!("Invalid JSON backup format: {e}")))?;
+
+        self.apply_backup_payload(payload)
+    }
+
+    pub fn apply_backup_payload(&self, payload: VaultBackupPayload) -> Result<usize, CatableError> {
+        let mut count = 0;
+        for ws in payload.workspaces {
+            let _ = self.save_workspace(&WorkspaceInput {
+                id: Some(ws.id),
+                name: ws.name,
+                color: ws.color,
+                description: ws.description,
+            });
+            count += 1;
+        }
+
+        for conn in payload.connections {
+            let _ = self.save_connection(&conn);
+            count += 1;
+        }
+
+        Ok(count)
     }
 }
 
@@ -622,5 +884,74 @@ mod tests {
         // Reset vault
         assert!(reset_vault().is_ok());
         assert!(!is_vault_initialized().unwrap());
+    }
+
+    #[test]
+    fn test_workspaces_and_backup_roundtrip() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("catable-test-ws-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        unsafe { std::env::set_var("CATABLE_DATA_DIR", &tmp) };
+
+        let vault = Vault::open().unwrap();
+
+        // 1. Create workspace
+        let ws = vault
+            .save_workspace(&WorkspaceInput {
+                id: None,
+                name: "Production Fleet".into(),
+                color: "#ef4444".into(),
+                description: Some("Prod databases".into()),
+            })
+            .unwrap();
+        assert_eq!(ws.name, "Production Fleet");
+
+        let workspaces = vault.list_workspaces().unwrap();
+        assert_eq!(workspaces.len(), 1);
+
+        // 2. Create connection in workspace
+        let cfg = ConnectionConfig {
+            id: "db-1".into(),
+            name: "Main DB".into(),
+            driver: DriverKind::Postgres,
+            environment: Environment::Production,
+            host: "db.internal".into(),
+            port: 5432,
+            database: "primary".into(),
+            user: "postgres".into(),
+            password: Some("secret123".into()),
+            read_only: false,
+            ssh_tunnel: None,
+            group_name: Some("Production Fleet".into()),
+        };
+        vault.save_connection(&cfg).unwrap();
+
+        // 3. Encrypted backup roundtrip
+        let backup_bytes = vault.export_encrypted_backup("backup-passphrase-888").unwrap();
+        assert!(backup_bytes.len() > 12);
+
+        // 4. JSON backup roundtrip
+        let json_str = vault.export_json_backup().unwrap();
+        assert!(json_str.contains("Production Fleet"));
+        assert!(json_str.contains("Main DB"));
+
+        // 5. Delete connection & workspace
+        vault.delete_connection("db-1").unwrap();
+        vault.delete_workspace(&ws.id).unwrap();
+        assert_eq!(vault.list_connections().unwrap().len(), 0);
+        assert_eq!(vault.list_workspaces().unwrap().len(), 0);
+
+        // 6. Restore from encrypted backup
+        let count = vault.import_encrypted_backup(&backup_bytes, "backup-passphrase-888").unwrap();
+        assert_eq!(count, 2); // 1 ws + 1 conn
+
+        let restored_conns = vault.list_connections().unwrap();
+        assert_eq!(restored_conns.len(), 1);
+        assert_eq!(restored_conns[0].name, "Main DB");
+        assert_eq!(restored_conns[0].password.as_deref(), Some("secret123"));
+
+        let restored_ws = vault.list_workspaces().unwrap();
+        assert_eq!(restored_ws.len(), 1);
+        assert_eq!(restored_ws[0].name, "Production Fleet");
     }
 }

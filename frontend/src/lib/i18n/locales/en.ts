@@ -57,6 +57,7 @@ const en = {
   },
   nav: {
     connections: 'Connections',
+    workspaces: 'Workspaces',
     sql_studio: 'SQL Studio',
     table_browser: 'Table Browser',
     schema_erd: 'Schema ERD',

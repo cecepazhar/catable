@@ -17,6 +17,14 @@ export const GENERATED_NAV_ITEMS: GeneratedNavItem[] = [
     path: "M13 10V3L4 14h7v7l9-11h-7z"
   },
   {
+    key: "workspaces",
+    label: "Workspaces",
+    href: "/groups",
+    icon: "folder",
+    description: "Database workspaces & clusters",
+    path: "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+  },
+  {
     key: "sql_studio",
     label: "SQL Studio",
     href: "/sql-studio",

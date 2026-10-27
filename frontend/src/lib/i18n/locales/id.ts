@@ -58,6 +58,7 @@ const id: Dictionary = {
   },
   nav: {
     connections: 'Koneksi',
+    workspaces: 'Workspaces',
     sql_studio: 'SQL Studio',
     table_browser: 'Peramban Tabel',
     schema_erd: 'Skema ERD',

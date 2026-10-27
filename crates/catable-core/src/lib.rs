@@ -33,5 +33,5 @@ pub use guard::{GuardVerdict, GuardrailEngine, QueryRisk};
 pub use tunnel::{open_tunnel, test_ssh_tunnel, TunnelSession};
 pub use vault::{
     change_master_password, is_vault_initialized, reset_vault, validate_vault_password,
-    MIN_PASSWORD_LEN, Vault,
+    MIN_PASSWORD_LEN, Vault, VaultBackupPayload, WorkspaceInput, WorkspaceRecord,
 };

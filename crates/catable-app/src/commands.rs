@@ -1,7 +1,8 @@
 use catable_core::{
     AiBackendConfig, AiDbaCopilot, AiExplainRequest, AiExplainResponse, AiChatRequest, AiChatResponse,
     CatermError, ConnectionConfig, ConnectionTestResult, DriverKind, GuardVerdict, GuardrailEngine,
-    QueryExecutor, QueryResult, QueryRisk, SchemaContext, TableInfo, Vault,
+    QueryExecutor, QueryResult, QueryRisk, SchemaContext, TableInfo, Vault, WorkspaceInput,
+    WorkspaceRecord,
 };
 use catable_core::billing::EntitlementState;
 use catable_core::pro::{
@@ -74,6 +75,71 @@ pub fn save_connection(
 pub fn delete_connection(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     let vault = state.vault.as_ref().map_err(|e| e.clone())?;
     vault.delete_connection(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_workspaces(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<WorkspaceRecord>, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.list_workspaces().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_workspace(
+    state: tauri::State<'_, AppState>,
+    input: WorkspaceInput,
+) -> Result<WorkspaceRecord, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.save_workspace(&input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_workspace(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.delete_workspace(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_encrypted_backup(
+    state: tauri::State<'_, AppState>,
+    passphrase: Option<String>,
+    password: Option<String>,
+) -> Result<Vec<u8>, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    let pass = passphrase
+        .or(password)
+        .ok_or_else(|| "Passphrase is required".to_string())?;
+    vault.export_encrypted_backup(&pass).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn import_encrypted_backup(
+    state: tauri::State<'_, AppState>,
+    data: Vec<u8>,
+    passphrase: Option<String>,
+    password: Option<String>,
+) -> Result<usize, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    let pass = passphrase
+        .or(password)
+        .ok_or_else(|| "Passphrase is required".to_string())?;
+    vault.import_encrypted_backup(&data, &pass).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_json_backup(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.export_json_backup().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn import_json_backup(
+    state: tauri::State<'_, AppState>,
+    json_str: String,
+) -> Result<usize, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.import_json_backup(&json_str).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

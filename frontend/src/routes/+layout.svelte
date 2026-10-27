@@ -5,7 +5,8 @@
   import { getAiChatState, toggleAiChat, closeAiChat } from '$lib/stores/aiChat.svelte';
   import { page } from '$app/state';
   import { getTheme, initTheme } from '$lib/stores/theme.svelte';
-  import { getToasts, showToast } from '$lib/stores/uiNotifications.svelte';
+  import { getToasts, showToast, confirmModal } from '$lib/stores/uiNotifications.svelte';
+  import ProfileMenu from '$lib/components/ProfileMenu.svelte';
   import FeedbackModal from '$lib/components/FeedbackModal.svelte';
   import CrashReportModal from '$lib/components/CrashReportModal.svelte';
   import { getPendingCrashReport, type ScrubbedCrashReport } from '$lib/api/crash';
@@ -43,7 +44,7 @@
   const pro = getPro();
 
   const cardBorderClass = $derived.by(() => {
-    if (!ambient.config.enabled || !ambient.config.cardGlowEnabled || !pro.isPro) {
+    if (!ambient.config.enabled || !ambient.config.cardGlowEnabled) {
       return 'border border-neutral-200 dark:border-neutral-800 md:border-b-0 md:border-r-0';
     }
     if (ambient.config.cardGlowStyle === 'neon-border') {
@@ -52,7 +53,7 @@
     if (ambient.config.cardGlowStyle === 'chroma-beam') {
       return 'border border-sky-400/50 dark:border-sky-400/40 md:border-b-0 md:border-r-0';
     }
-    return 'border border-sky-400/30 dark:border-sky-400/25 md:border-b-0 md:border-r-0';
+    return 'border border-sky-400/40 dark:border-sky-400/30 md:border-b-0 md:border-r-0';
   });
 
   const filteredConnections = $derived(
@@ -123,6 +124,23 @@
   function handleDisconnect() {
     dbStore.disconnect();
     void goto('/');
+  }
+
+  async function deleteConnFromSidebar(conn: ConnectionConfig) {
+    const ok = await confirmModal(
+      `Delete connection "${conn.name}"?`,
+      'Delete Connection',
+      true,
+      'Delete',
+      'Cancel'
+    );
+    if (!ok) return;
+    try {
+      await dbStore.deleteConnection(conn.id);
+      showToast(`Connection "${conn.name}" deleted`, 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to delete connection', 'error');
+    }
   }
 
   let { children } = $props();
@@ -241,17 +259,53 @@
         <!-- ANTARES SQL STYLE: CONNECTION MANAGER SIDEBAR -->
         <!-- ============================================== -->
         <div class="p-2.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-1">
-          <span class="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Connections</span>
-          <button
-            onclick={handleNewConnection}
-            class="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors cursor-pointer"
-            title="Create New Connection"
+          <span class="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+            {#if !isCollapsed}Connections{/if}
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              onclick={toggleSidebar}
+              class="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-200/50 dark:hover:bg-neutral-800 cursor-pointer"
+              title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+              aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+            >
+              {#if isCollapsed}»{:else}«{/if}
+            </button>
+            {#if !isCollapsed}
+              <button
+                type="button"
+                onclick={handleNewConnection}
+                class="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors cursor-pointer"
+                title="Create New Connection"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                </svg>
+                <span>New</span>
+              </button>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Workspaces Navigation Item -->
+        <div class="px-2 pt-2 pb-1 border-b border-neutral-200 dark:border-neutral-800/60">
+          <a
+            href="/groups"
+            class="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors {page.url.pathname === '/groups' ? 'bg-blue-600 text-white' : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
           >
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
-            <span>New</span>
-          </button>
+            <div class="flex items-center gap-2">
+              <svg class="w-4 h-4 text-blue-500 {page.url.pathname === '/groups' ? 'text-white' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              {#if !isCollapsed}<span>Workspaces</span>{/if}
+            </div>
+            {#if !isCollapsed}
+              <span class="text-[10px] font-mono opacity-80 bg-neutral-200 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-600 dark:text-neutral-300">
+                Manage →
+              </span>
+            {/if}
+          </a>
         </div>
 
         <!-- Connection Search Filter -->
@@ -278,7 +332,7 @@
               onclick={() => selectConnection(conn)}
               ondblclick={() => connectToDb(conn)}
               onkeydown={(e) => e.key === 'Enter' && selectConnection(conn)}
-              class="w-full text-left p-2.5 rounded-xl cursor-pointer transition-all border {dbStore.selectedConnectionId === conn.id && page.url.pathname === '/' ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-700 shadow-xs' : 'border-transparent hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50'}"
+              class="group relative w-full text-left p-2.5 rounded-xl cursor-pointer transition-all border {dbStore.selectedConnectionId === conn.id && page.url.pathname === '/' ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-700 shadow-xs' : 'border-transparent hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50'}"
             >
               <div class="flex items-center justify-between gap-1 mb-1">
                 <span class="font-semibold text-xs text-neutral-900 dark:text-white truncate">{conn.name}</span>
@@ -290,6 +344,19 @@
                     <span class="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-sky-500/10 text-sky-500 border border-sky-500/30">SSH</span>
                   {/if}
                   <span class="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold uppercase bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">{conn.driver}</span>
+                  <button
+                    type="button"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      void deleteConnFromSidebar(conn);
+                    }}
+                    class="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-rose-100 dark:hover:bg-rose-950/60 text-neutral-400 hover:text-rose-500 transition-opacity"
+                    title="Delete Connection"
+                  >
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
                 </div>
               </div>
               <div class="text-[10px] text-neutral-500 dark:text-neutral-400 truncate font-mono">
@@ -390,26 +457,18 @@
         </div>
       {/if}
 
-      <!-- Bottom Settings Link -->
-      <div class="p-2 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between text-xs">
-        <a
-          href="/settings"
-          class="flex items-center gap-2 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white px-2 py-1.5 rounded-lg hover:bg-neutral-200/50 dark:hover:bg-neutral-800 transition-colors w-full"
-        >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 001.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-          <span>Settings & License</span>
-        </a>
+      <!-- Bottom User Profile Card (CATerm Standard) -->
+      <div class="p-2 border-t border-neutral-200 dark:border-neutral-800/80">
+        <ProfileMenu collapsed={isCollapsed} onLock={() => {}} onSignOut={() => {}} onOpenAbout={() => {}} />
       </div>
     </aside>
 
-    <!-- Main Content Panel -->
-    <div class="flex-1 min-w-0 flex relative overflow-hidden bg-white dark:bg-[#161616]">
-      <AmbientGlow defaultAccent="#64748b" />
-      
-      <main class="flex-1 min-w-0 flex overflow-hidden relative z-10">
-        <div class="flex-1 min-w-0 overflow-auto text-neutral-900 dark:text-neutral-100 relative">
+    <!-- Content panel with Outer Ambient Halo Underglow -->
+    <div class="flex-1 min-w-0 flex relative overflow-visible pl-2 pt-2 pr-0 pb-0 md:p-0">
+      <AmbientGlow defaultAccent="#0ea5e9" />
+
+      <main class="flex-1 min-w-0 flex overflow-hidden relative z-10 bg-white dark:bg-[#161616] {cardBorderClass} rounded-none rounded-tl-2xl md:rounded-none md:rounded-tl-2xl transition-colors duration-150">
+        <div class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden text-neutral-900 dark:text-neutral-100 relative px-4 py-6 md:px-8 md:py-8 bg-[linear-gradient(to_right,#0000000a_1px,transparent_1px),linear-gradient(to_bottom,#0000000a_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:56px_56px] z-20">
           {@render children()}
         </div>
 

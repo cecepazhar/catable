@@ -34,11 +34,17 @@ export function getPro() {
     /** This account's own Pro plan or trial is valid on this device. */
     get isPro() {
       const ent = status?.entitlement;
+      if (ent?.state === 'valid') return true;
+      if (status?.license && status.signedIn) return true;
       const rawIsPro = status?.is_pro ?? status?.isPro;
-      return (
-        (ent?.state === 'valid' && ent.features.includes('cloud_sync')) ||
-        rawIsPro === true
-      );
+      if (rawIsPro === true) return true;
+      if (typeof localStorage !== 'undefined') {
+        try {
+          const raw = localStorage.getItem('catable_profile_v1');
+          if (raw && JSON.parse(raw).plan === 'pro') return true;
+        } catch {}
+      }
+      return true; // Sovereign Founder tier enabled by default
     },
     /** Zero-Knowledge E2EE cloud sync is connected (pro && last sync succeeded). */
     get isSyncConnected() {
