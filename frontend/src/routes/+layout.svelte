@@ -45,15 +45,15 @@
 
   const cardBorderClass = $derived.by(() => {
     if (!ambient.config.enabled || !ambient.config.cardGlowEnabled) {
-      return 'border border-neutral-200 dark:border-neutral-800 md:border-b-0 md:border-r-0';
+      return 'border-t border-l border-neutral-200 dark:border-neutral-800';
     }
     if (ambient.config.cardGlowStyle === 'neon-border') {
-      return 'border border-sky-400 dark:border-sky-400 md:border-b-0 md:border-r-0 shadow-[inset_0_0_8px_rgba(56,189,248,0.15)]';
+      return 'border-t border-l border-sky-400 dark:border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.35),inset_0_0_10px_rgba(56,189,248,0.15)]';
     }
     if (ambient.config.cardGlowStyle === 'chroma-beam') {
-      return 'border border-sky-400/50 dark:border-sky-400/40 md:border-b-0 md:border-r-0';
+      return 'border-t border-l border-sky-400/80 dark:border-sky-400/70 shadow-[0_0_12px_rgba(56,189,248,0.3)]';
     }
-    return 'border border-sky-400/40 dark:border-sky-400/30 md:border-b-0 md:border-r-0';
+    return 'border-t border-l border-sky-400 dark:border-sky-400 shadow-[0_0_15px_rgba(56,189,248,0.35),inset_0_0_10px_rgba(56,189,248,0.15)]';
   });
 
   const filteredConnections = $derived(
@@ -160,11 +160,11 @@
 <CommandPalette onLock={() => {}} />
 
 <!-- Shell: Direct Launch, No LockScreen / No Login gatekeeper -->
-<div class="flex flex-col h-screen bg-neutral-100 dark:bg-[#0e0e0e] text-neutral-800 dark:text-neutral-300 font-sans transition-colors duration-150 pb-[env(safe-area-inset-bottom,0px)] select-none">
+<div class="flex flex-col h-screen w-screen overflow-hidden bg-neutral-100 dark:bg-[#0e0e0e] text-neutral-800 dark:text-neutral-300 font-sans transition-colors duration-150 pb-[env(safe-area-inset-bottom,0px)] select-none">
   
   <!-- Title Bar: Frameless top header across the window -->
   <header
-    class="min-h-[3rem] h-[calc(3rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] flex items-center gap-1 md:gap-2 pl-2 pr-1 md:pl-3 shrink-0 select-none cursor-default border-b border-neutral-200 dark:border-neutral-800/80"
+    class="min-h-[3rem] h-[calc(3rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] flex items-center gap-1 md:gap-2 pl-2 pr-1 md:pl-3 shrink-0 select-none cursor-default"
     data-tauri-drag-region
     onmousedown={startDragging}
     ondblclick={(e) => {
@@ -247,61 +247,53 @@
   </header>
 
   <!-- App Body: Two-State Dynamic Sidebar + Main Content -->
-  <div class="flex-1 flex overflow-hidden">
+  <div class="flex-1 flex min-h-0 relative overflow-visible">
     
     <!-- Desktop Sidebar (Antares / TablePlus Dynamic Mode) -->
     <aside
-      class="hidden md:flex flex-col shrink-0 border-r border-neutral-200 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-[#121212] {isCollapsed ? 'w-14' : 'w-64'} transition-all duration-150"
+      class="hidden md:flex flex-col shrink-0 bg-transparent {isCollapsed ? 'w-14' : 'w-60'} transition-all duration-150"
       aria-label="Sidebar Navigasi Database"
     >
       {#if !dbStore.isConnected}
         <!-- ============================================== -->
         <!-- ANTARES SQL STYLE: CONNECTION MANAGER SIDEBAR -->
         <!-- ============================================== -->
-        <div class="p-2.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-1">
-          <span class="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-            {#if !isCollapsed}Connections{/if}
-          </span>
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              onclick={toggleSidebar}
-              class="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-200/50 dark:hover:bg-neutral-800 cursor-pointer"
-              title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-              aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-            >
-              {#if isCollapsed}»{:else}«{/if}
-            </button>
+        <div class="h-12 flex items-center justify-between px-3.5 shrink-0">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-xs font-bold uppercase tracking-wider text-neutral-400">
+              {#if !isCollapsed}Connections{/if}
+            </span>
             {#if !isCollapsed}
-              <button
-                type="button"
-                onclick={handleNewConnection}
-                class="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-sm transition-colors cursor-pointer"
-                title="Create New Connection"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                </svg>
-                <span>New</span>
-              </button>
+              <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-800/80 text-neutral-400 border border-neutral-700/60 font-semibold">
+                {dbStore.connections.length}
+              </span>
             {/if}
           </div>
+          <button
+            type="button"
+            onclick={toggleSidebar}
+            class="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800/80 transition-colors cursor-pointer shrink-0"
+            title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+            aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          >
+            {#if isCollapsed}»{:else}«{/if}
+          </button>
         </div>
 
         <!-- Workspaces Navigation Item -->
-        <div class="px-2 pt-2 pb-1 border-b border-neutral-200 dark:border-neutral-800/60">
+        <div class="px-2.5 pb-2">
           <a
             href="/groups"
-            class="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors {page.url.pathname === '/groups' ? 'bg-blue-600 text-white' : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
+            class="flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-colors {page.url.pathname === '/groups' ? 'bg-blue-600 text-white shadow-xs' : 'text-neutral-400 hover:text-white hover:bg-neutral-800/60'}"
           >
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2.5">
               <svg class="w-4 h-4 text-blue-500 {page.url.pathname === '/groups' ? 'text-white' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
               </svg>
               {#if !isCollapsed}<span>Workspaces</span>{/if}
             </div>
             {#if !isCollapsed}
-              <span class="text-[10px] font-mono opacity-80 bg-neutral-200 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-600 dark:text-neutral-300">
+              <span class="text-[10px] font-mono opacity-80 bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-400">
                 Manage →
               </span>
             {/if}
@@ -309,13 +301,13 @@
         </div>
 
         <!-- Connection Search Filter -->
-        <div class="p-2 border-b border-neutral-200 dark:border-neutral-800/60">
+        <div class="px-2.5 pb-2">
           <div class="relative">
             <input
               type="text"
               bind:value={connectionSearch}
               placeholder="Filter connections..."
-              class="w-full text-xs pl-7 pr-2 py-1.5 bg-white dark:bg-neutral-800/90 rounded-lg border border-neutral-200 dark:border-neutral-700 focus:outline-none focus:ring-1 focus:ring-blue-500 text-neutral-800 dark:text-neutral-200"
+              class="w-full text-xs pl-7 pr-2 py-1.5 bg-white dark:bg-neutral-800/90 rounded-xl border border-neutral-200 dark:border-neutral-700/80 focus:outline-none focus:ring-1 focus:ring-blue-500 text-neutral-800 dark:text-neutral-200"
             />
             <svg class="w-3.5 h-3.5 absolute left-2 top-2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -324,7 +316,7 @@
         </div>
 
         <!-- Connection List -->
-        <div class="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin">
+        <div class="flex-1 overflow-y-auto px-2.5 py-1 space-y-1 scrollbar-thin">
           {#each filteredConnections as conn (conn.id)}
             <div
               role="button"
@@ -370,7 +362,7 @@
         <!-- ============================================== -->
         <!-- TABLEPLUS STYLE: ACTIVE DATABASE WORKSPACE    -->
         <!-- ============================================== -->
-        <div class="p-2.5 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-100/50 dark:bg-neutral-900/60 flex items-center justify-between gap-2">
+        <div class="mx-2.5 my-2 p-2 rounded-xl border border-neutral-800 bg-neutral-900/60 flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
             <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
             <div class="min-w-0">
@@ -380,7 +372,7 @@
           </div>
           <button
             onclick={handleDisconnect}
-            class="text-[11px] font-medium text-rose-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 px-2 py-1 rounded transition-colors shrink-0"
+            class="text-[11px] font-medium text-rose-500 hover:text-rose-400 hover:bg-rose-950/40 px-2 py-1 rounded transition-colors shrink-0 cursor-pointer"
             title="Disconnect & Return to Connections"
           >
             Switch
@@ -388,7 +380,7 @@
         </div>
 
         <!-- Workspace Nav Tabs -->
-        <div class="p-2 border-b border-neutral-200 dark:border-neutral-800/80 space-y-0.5 text-xs">
+        <div class="px-2.5 py-1 space-y-0.5 text-xs">
           <a
             href="/table-browser"
             class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-colors {page.url.pathname === '/table-browser' ? 'bg-blue-600 text-white font-medium' : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
@@ -464,10 +456,10 @@
     </aside>
 
     <!-- Content panel with Outer Ambient Halo Underglow -->
-    <div class="flex-1 min-w-0 flex relative overflow-visible pl-2 pt-2 pr-0 pb-0 md:p-0">
+    <div class="flex-1 min-w-0 flex relative overflow-visible">
       <AmbientGlow defaultAccent="#0ea5e9" />
 
-      <main class="flex-1 min-w-0 flex overflow-hidden relative z-10 bg-white dark:bg-[#161616] {cardBorderClass} rounded-none rounded-tl-2xl md:rounded-none md:rounded-tl-2xl transition-colors duration-150">
+      <main class="flex-1 min-w-0 flex overflow-hidden relative z-10 bg-white dark:bg-[#161616] {cardBorderClass} rounded-tl-2xl transition-colors duration-150">
         <div class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden text-neutral-900 dark:text-neutral-100 relative px-4 py-6 md:px-8 md:py-8 bg-[linear-gradient(to_right,#0000000a_1px,transparent_1px),linear-gradient(to_bottom,#0000000a_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:56px_56px] z-20">
           {@render children()}
         </div>
