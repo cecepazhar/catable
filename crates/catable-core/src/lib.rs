@@ -20,6 +20,7 @@ pub mod ai;
 pub mod billing;
 pub mod db;
 pub mod pro;
+pub mod license_local;
 
 pub use ai::{
     AiBackendConfig, AiChatRequest, AiChatResponse, AiDbaCopilot, AiExplainRequest,
@@ -33,5 +34,6 @@ pub use guard::{GuardVerdict, GuardrailEngine, QueryRisk};
 pub use tunnel::{open_tunnel, test_ssh_tunnel, TunnelSession};
 pub use vault::{
     change_master_password, is_vault_initialized, reset_vault, validate_vault_password,
-    MIN_PASSWORD_LEN, Vault, VaultBackupPayload, WorkspaceInput, WorkspaceRecord,
+    MIN_PASSWORD_LEN, PersonalizedGroupInput, PersonalizedGroupRecord, Vault,
+    VaultBackupPayload, WorkspaceInput, WorkspaceRecord,
 };
