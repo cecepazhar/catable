@@ -27,6 +27,24 @@ export interface ConnectionConfig {
   read_only: boolean;
   ssh_tunnel?: SshTunnelConfig | null;
   group_name?: string | null;
+  workspace_id?: string | null;
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  name: string;
+  color: string;
+  description?: string | null;
+  created_at: number;
+}
+
+export interface PersonalizedGroupRecord {
+  id: string;
+  workspace_id: string;
+  name: string;
+  color: string;
+  description?: string | null;
+  created_at: number;
 }
 
 export interface TableColumnInfo {

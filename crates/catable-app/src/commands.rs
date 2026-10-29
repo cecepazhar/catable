@@ -101,6 +101,30 @@ pub fn delete_workspace(state: tauri::State<'_, AppState>, id: String) -> Result
 }
 
 #[tauri::command]
+pub fn list_groups(
+    state: tauri::State<'_, AppState>,
+    workspace_id: Option<String>,
+) -> Result<Vec<catable_core::PersonalizedGroupRecord>, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.list_groups(workspace_id.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_group(
+    state: tauri::State<'_, AppState>,
+    input: catable_core::PersonalizedGroupInput,
+) -> Result<catable_core::PersonalizedGroupRecord, String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.save_group(&input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_group(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.delete_group(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn export_encrypted_backup(
     state: tauri::State<'_, AppState>,
     passphrase: Option<String>,

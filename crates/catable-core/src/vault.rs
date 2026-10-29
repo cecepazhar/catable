@@ -29,12 +29,33 @@ pub struct WorkspaceInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalizedGroupRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub color: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalizedGroupInput {
+    pub id: Option<String>,
+    pub workspace_id: String,
+    pub name: String,
+    pub color: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultBackupPayload {
     pub version: String,
     pub timestamp: i64,
     pub connections: Vec<ConnectionConfig>,
     #[serde(default)]
     pub workspaces: Vec<WorkspaceRecord>,
+    #[serde(default)]
+    pub groups: Vec<PersonalizedGroupRecord>,
 }
 
 /// Global vault-unlock flag: true once a correct master password has been validated this session.
@@ -80,7 +101,8 @@ impl Vault {
                 read_only   INTEGER NOT NULL DEFAULT 0,
                 encrypted_password TEXT,
                 ssh_tunnel  TEXT,
-                group_name  TEXT
+                group_name  TEXT,
+                workspace_id TEXT DEFAULT 'default'
             );
 
             CREATE TABLE IF NOT EXISTS workspaces (
@@ -89,6 +111,16 @@ impl Vault {
                 color       TEXT NOT NULL,
                 description TEXT,
                 created_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS personalized_groups (
+                id           TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                name         TEXT NOT NULL,
+                color        TEXT NOT NULL,
+                description  TEXT,
+                created_at   INTEGER NOT NULL,
+                UNIQUE(workspace_id, name)
             );
             "#,
         )
@@ -115,6 +147,11 @@ impl Vault {
 
         if !column_exists("group_name")? {
             conn.execute_batch("ALTER TABLE connections ADD COLUMN group_name TEXT")
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+        }
+
+        if !column_exists("workspace_id")? {
+            conn.execute_batch("ALTER TABLE connections ADD COLUMN workspace_id TEXT DEFAULT 'default'")
                 .map_err(|e| CatableError::Vault(e.to_string()))?;
         }
 
@@ -163,8 +200,8 @@ impl Vault {
 
         conn.execute(
             r#"
-            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name, workspace_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 driver = excluded.driver,
@@ -176,7 +213,8 @@ impl Vault {
                 read_only = excluded.read_only,
                 encrypted_password = COALESCE(excluded.encrypted_password, connections.encrypted_password),
                 ssh_tunnel = excluded.ssh_tunnel,
-                group_name = excluded.group_name;
+                group_name = excluded.group_name,
+                workspace_id = excluded.workspace_id;
             "#,
             params![
                 cfg.id,
@@ -190,7 +228,8 @@ impl Vault {
                 if cfg.read_only { 1 } else { 0 },
                 encrypted_password_param,
                 encrypted_ssh_tunnel_param,
-                cfg.group_name.as_deref()
+                cfg.group_name.as_deref(),
+                cfg.workspace_id.as_deref().unwrap_or("default")
             ],
         )
         .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -204,7 +243,7 @@ impl Vault {
             .lock()
             .map_err(|e| CatableError::Vault(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name FROM connections ORDER BY name ASC")
+            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name, workspace_id FROM connections ORDER BY name ASC")
             .map_err(|e| CatableError::Vault(e.to_string()))?;
 
         let rows = stmt
@@ -215,6 +254,7 @@ impl Vault {
                 let enc_pw: Option<String> = r.get(9)?;
                 let enc_ssh: Option<String> = r.get(10)?;
                 let group_name: Option<String> = r.get(11)?;
+                let workspace_id: Option<String> = r.get(12).unwrap_or(Some("default".to_string()));
 
                 let driver: DriverKind = serde_json::from_str(&format!("\"{}\"", driver_s))
                     .unwrap_or(DriverKind::Sqlite);
@@ -271,6 +311,7 @@ impl Vault {
                     read_only: read_only_int != 0,
                     ssh_tunnel,
                     group_name,
+                    workspace_id,
                 })
             })
             .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -396,6 +437,136 @@ impl Vault {
         Ok(())
     }
 
+    pub fn list_groups(&self, workspace_id: Option<&str>) -> Result<Vec<PersonalizedGroupRecord>, CatableError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        let mut groups = Vec::new();
+        if let Some(ws_id) = workspace_id {
+            let mut stmt = conn
+                .prepare("SELECT id, workspace_id, name, color, description, created_at FROM personalized_groups WHERE workspace_id = ?1 ORDER BY created_at ASC")
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+            let rows = stmt
+                .query_map(params![ws_id], |row| {
+                    Ok(PersonalizedGroupRecord {
+                        id: row.get(0)?,
+                        workspace_id: row.get(1)?,
+                        name: row.get(2)?,
+                        color: row.get(3)?,
+                        description: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+            for row in rows {
+                groups.push(row.map_err(|e| CatableError::Vault(e.to_string()))?);
+            }
+        } else {
+            let mut stmt = conn
+                .prepare("SELECT id, workspace_id, name, color, description, created_at FROM personalized_groups ORDER BY created_at ASC")
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(PersonalizedGroupRecord {
+                        id: row.get(0)?,
+                        workspace_id: row.get(1)?,
+                        name: row.get(2)?,
+                        color: row.get(3)?,
+                        description: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+            for row in rows {
+                groups.push(row.map_err(|e| CatableError::Vault(e.to_string()))?);
+            }
+        }
+        Ok(groups)
+    }
+
+    pub fn save_group(&self, input: &PersonalizedGroupInput) -> Result<PersonalizedGroupRecord, CatableError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        let now = chrono::Utc::now().timestamp();
+        let id = input
+            .id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        let old_name: Option<String> = conn
+            .query_row(
+                "SELECT name FROM personalized_groups WHERE id = ?1",
+                params![&id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        conn.execute(
+            r#"
+            INSERT INTO personalized_groups (id, workspace_id, name, color, description, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(id) DO UPDATE SET
+                workspace_id = excluded.workspace_id,
+                name = excluded.name,
+                color = excluded.color,
+                description = excluded.description
+            "#,
+            params![
+                &id,
+                input.workspace_id.trim(),
+                input.name.trim(),
+                &input.color,
+                &input.description,
+                now
+            ],
+        )
+        .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        if let Some(old) = old_name {
+            if old != input.name.trim() {
+                let _ = conn.execute(
+                    "UPDATE connections SET group_name = ?1 WHERE group_name = ?2",
+                    params![input.name.trim(), old],
+                );
+            }
+        }
+
+        Ok(PersonalizedGroupRecord {
+            id,
+            workspace_id: input.workspace_id.trim().to_string(),
+            name: input.name.trim().to_string(),
+            color: input.color.clone(),
+            description: input.description.clone(),
+            created_at: now,
+        })
+    }
+
+    pub fn delete_group(&self, id: &str) -> Result<(), CatableError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+
+        if let Ok(name) = conn.query_row::<String, _, _>(
+            "SELECT name FROM personalized_groups WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ) {
+            let _ = conn.execute(
+                "UPDATE connections SET group_name = NULL WHERE group_name = ?1",
+                params![&name],
+            );
+        }
+
+        conn.execute("DELETE FROM personalized_groups WHERE id = ?1", params![id])
+            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn export_encrypted_backup(&self, passphrase: &str) -> Result<Vec<u8>, CatableError> {
         if passphrase.len() < MIN_PASSWORD_LEN {
             return Err(CatableError::Vault(format!(
@@ -406,6 +577,7 @@ impl Vault {
 
         let connections = self.list_connections()?;
         let workspaces = self.list_workspaces()?;
+        let groups = self.list_groups(None)?;
         let now = chrono::Utc::now().timestamp();
 
         let payload = VaultBackupPayload {
@@ -413,6 +585,7 @@ impl Vault {
             timestamp: now,
             connections,
             workspaces,
+            groups,
         };
 
         let json_bytes = serde_json::to_vec(&payload)
@@ -479,6 +652,7 @@ impl Vault {
     pub fn export_json_backup(&self) -> Result<String, CatableError> {
         let connections = self.list_connections()?;
         let workspaces = self.list_workspaces()?;
+        let groups = self.list_groups(None)?;
         let now = chrono::Utc::now().timestamp();
 
         let payload = VaultBackupPayload {
@@ -486,6 +660,7 @@ impl Vault {
             timestamp: now,
             connections,
             workspaces,
+            groups,
         };
 
         serde_json::to_string_pretty(&payload)
@@ -507,6 +682,17 @@ impl Vault {
                 name: ws.name,
                 color: ws.color,
                 description: ws.description,
+            });
+            count += 1;
+        }
+
+        for grp in payload.groups {
+            let _ = self.save_group(&PersonalizedGroupInput {
+                id: Some(grp.id),
+                workspace_id: grp.workspace_id,
+                name: grp.name,
+                color: grp.color,
+                description: grp.description,
             });
             count += 1;
         }

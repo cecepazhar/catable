@@ -68,6 +68,8 @@ pub struct ConnectionConfig {
     pub ssh_tunnel: Option<SshTunnelConfig>,
     #[serde(default)]
     pub group_name: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
 }
 
 impl ConnectionConfig {

@@ -26,6 +26,7 @@
   import { getAmbientStore } from '$lib/stores/ambient.svelte';
   import { getPro } from '$lib/stores/pro.svelte';
   import { dbStore, type ConnectionConfig } from '$lib/stores/database.svelte';
+  import DatabaseIcon from '$lib/components/DatabaseIcon.svelte';
   import { goto } from '$app/navigation';
 
   let isCollapsed = $state(false);
@@ -217,6 +218,28 @@
 
     <!-- Right: Header Controls -->
     <div class="flex items-center gap-1.5 text-neutral-500 dark:text-neutral-400 shrink-0" data-tauri-drag-region>
+      <!-- Cyberpunk AI Copilot Bot Button -->
+      <button
+        type="button"
+        onclick={handleAiToggle}
+        class="p-1.5 rounded-md transition-colors relative flex items-center justify-center cursor-pointer {aiChat.open ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-[0_0_10px_rgba(56,189,248,0.25)]' : 'hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200/70 dark:hover:bg-neutral-800'}"
+        title="AI Copilot Studio"
+        aria-label="AI Copilot Studio"
+      >
+        <!-- Cyberpunk Bot Icon -->
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9.75 3.104v1.272c-2.45.312-4.43 2.128-4.71 4.544H4.25a1.25 1.25 0 000 2.5h.79c.28 2.416 2.26 4.232 4.71 4.544v1.272a2 2 0 002 2h.5a2 2 0 002-2v-1.272c2.45-.312 4.43-2.128 4.71-4.544h.79a1.25 1.25 0 000-2.5h-.79c-.28-2.416-2.26-4.232-4.71-4.544V3.104a.75.75 0 00-1.5 0v.932h-.5V3.104a.75.75 0 00-1.5 0z" />
+          <circle cx="9" cy="10.5" r="1.2" fill="currentColor" />
+          <circle cx="15" cy="10.5" r="1.2" fill="currentColor" />
+          <path stroke-linecap="round" stroke-width="1.5" d="M9.5 13.5h5" />
+        </svg>
+        {#if aiChat.open}
+          <span class="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+        {:else}
+          <span class="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+        {/if}
+      </button>
+
       <HeaderQuickControls
         layout={1}
         showFiles={false}
@@ -316,45 +339,59 @@
         </div>
 
         <!-- Connection List -->
-        <div class="flex-1 overflow-y-auto px-2.5 py-1 space-y-1 scrollbar-thin">
+        <div class="flex-1 overflow-y-auto {isCollapsed ? 'px-1' : 'px-2.5'} py-1 space-y-1 scrollbar-thin">
           {#each filteredConnections as conn (conn.id)}
-            <div
-              role="button"
-              tabindex="0"
-              onclick={() => selectConnection(conn)}
-              ondblclick={() => connectToDb(conn)}
-              onkeydown={(e) => e.key === 'Enter' && selectConnection(conn)}
-              class="group relative w-full text-left p-2.5 rounded-xl cursor-pointer transition-all border {dbStore.selectedConnectionId === conn.id && page.url.pathname === '/' ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-700 shadow-xs' : 'border-transparent hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50'}"
-            >
-              <div class="flex items-center justify-between gap-1 mb-1">
-                <span class="font-semibold text-xs text-neutral-900 dark:text-white truncate">{conn.name}</span>
-                <div class="flex items-center gap-1 shrink-0">
+            {#if isCollapsed}
+              <button
+                type="button"
+                onclick={() => selectConnection(conn)}
+                ondblclick={() => connectToDb(conn)}
+                class="w-full flex items-center justify-center p-2 rounded-xl transition-all border {dbStore.selectedConnectionId === conn.id && page.url.pathname === '/' ? 'bg-sky-500/15 border-sky-500/40 text-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.2)]' : 'border-transparent hover:bg-neutral-800/60'}"
+                title="{conn.name} ({conn.driver})"
+              >
+                <DatabaseIcon driver={conn.driver} size={20} />
+              </button>
+            {:else}
+              <div
+                role="button"
+                tabindex="0"
+                onclick={() => selectConnection(conn)}
+                ondblclick={() => connectToDb(conn)}
+                onkeydown={(e) => e.key === 'Enter' && selectConnection(conn)}
+                class="group relative w-full text-left p-2.5 rounded-xl cursor-pointer transition-all border {dbStore.selectedConnectionId === conn.id && page.url.pathname === '/' ? 'bg-sky-500/10 border-sky-500/40 shadow-xs' : 'border-transparent hover:bg-neutral-800/50'}"
+              >
+                <div class="flex items-center justify-between gap-1 mb-1">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <DatabaseIcon driver={conn.driver} size={15} />
+                    <span class="font-semibold text-xs text-neutral-900 dark:text-white truncate">{conn.name}</span>
+                  </div>
+                  <div class="flex items-center gap-1 shrink-0">
+                    {#if conn.ssh_tunnel?.enabled}
+                      <span class="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-sky-500/10 text-sky-400 border border-sky-500/30">SSH</span>
+                    {/if}
+                    <button
+                      type="button"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        void deleteConnFromSidebar(conn);
+                      }}
+                      class="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-rose-950/60 text-neutral-400 hover:text-rose-500 transition-opacity"
+                      title="Delete Connection"
+                    >
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-1 text-[10px] text-neutral-500 dark:text-neutral-400 font-mono">
+                  <span class="truncate">{conn.driver === 'sqlite' || conn.driver === 'duckdb' ? conn.database : `${conn.user}@${conn.host}:${conn.port}`}</span>
                   {#if conn.group_name}
-                    <span class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-neutral-200/60 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400 truncate max-w-[70px]">{conn.group_name}</span>
+                    <span class="text-neutral-400 truncate max-w-[65px]">[{conn.group_name}]</span>
                   {/if}
-                  {#if conn.ssh_tunnel?.enabled}
-                    <span class="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-sky-500/10 text-sky-500 border border-sky-500/30">SSH</span>
-                  {/if}
-                  <span class="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold uppercase bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">{conn.driver}</span>
-                  <button
-                    type="button"
-                    onclick={(e) => {
-                      e.stopPropagation();
-                      void deleteConnFromSidebar(conn);
-                    }}
-                    class="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-rose-100 dark:hover:bg-rose-950/60 text-neutral-400 hover:text-rose-500 transition-opacity"
-                    title="Delete Connection"
-                  >
-                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
                 </div>
               </div>
-              <div class="text-[10px] text-neutral-500 dark:text-neutral-400 truncate font-mono">
-                {conn.driver === 'sqlite' || conn.driver === 'duckdb' ? conn.database : `${conn.user}@${conn.host}:${conn.port}`}
-              </div>
-            </div>
+            {/if}
           {/each}
         </div>
 
@@ -363,8 +400,8 @@
         <!-- TABLEPLUS STYLE: ACTIVE DATABASE WORKSPACE    -->
         <!-- ============================================== -->
         <div class="mx-2.5 my-2 p-2 rounded-xl border border-neutral-800 bg-neutral-900/60 flex items-center justify-between gap-2">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+          <div class="flex items-center gap-2.5 min-w-0">
+            <DatabaseIcon driver={dbStore.activeConnection.driver} size={18} withBadge={true} badgeSize="sm" />
             <div class="min-w-0">
               <div class="text-xs font-bold text-neutral-900 dark:text-white truncate">{dbStore.activeConnection.name}</div>
               <div class="text-[10px] text-neutral-400 uppercase font-mono">{dbStore.activeConnection.driver}</div>
@@ -470,23 +507,6 @@
       </main>
     </div>
   </div>
-
-  <!-- Floating Action Button: AI Copilot -->
-  {#if !aiChat.open}
-    <button
-      type="button"
-      onclick={() => handleAiToggle()}
-      class="fixed bottom-20 right-4 md:bottom-5 md:right-5 z-40 flex items-center gap-2 px-3.5 py-2 rounded-full bg-neutral-900/90 hover:bg-neutral-800 text-neutral-100 border border-neutral-700/80 shadow-2xl shadow-black/60 hover:scale-105 active:scale-95 transition-all text-xs font-semibold cursor-pointer group"
-      title="AI Copilot (CATable Assistant)"
-      aria-label="Open AI Copilot"
-    >
-      <svg class="w-4 h-4 text-rose-500 group-hover:rotate-12 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-      </svg>
-      <span>AI Copilot</span>
-      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-    </button>
-  {/if}
 
   <BottomNav onOpenAll={() => (allMenusSheetOpen = true)} />
   <AllMenusSheet bind:open={allMenusSheetOpen} onClose={() => (allMenusSheetOpen = false)} />
