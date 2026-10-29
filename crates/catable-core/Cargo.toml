@@ -40,5 +40,7 @@ once_cell = "1.21"
 zeroize = { version = "1", features = ["derive"] }
 aes-gcm = "0.10"
 ssh2 = "0.9.6"
+dirs = "7.0.0"
+anyhow = "1.0.104"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 machine-uid = "0.5"
