@@ -34,61 +34,7 @@ fn db_err(e: rusqlite::Error) -> CatermError {
 }
 
 fn now() -> i64 {
-    chrono::Utc::now().timestamp();
     chrono::Utc::now().timestamp()
-}
-
-fn load_local_license() -> Option<crate::license_local::LocalLicense> {
-    crate::license_local::load_license("catable").ok().flatten()
-}
-
-fn is_local_license_valid() -> bool {
-    load_local_license().map_or(false, |lic| crate::license_local::is_license_valid(&lic))
-}
-
-pub fn export_license_key() -> Result<String, CatermError> {
-    load_local_license()
-        .map(|lic| lic.key)
-        .ok_or_else(|| pro_err("NO_LICENSE_EXPORT"))
-}
-
-pub fn import_license_key(key: &str) -> Result<(), CatermError> {
-    activate_license_key(key)?;
-fn now() -> i64 {
-    use chrono::Utc;
-    Utc::now().timestamp()
-}
-
-// ── Offline License Helpers ─────────────────────────────────────────────────────
-
-fn save_local_license(key: &str, product: &str, tier: &str, expires_at: i64) -> Result<(), CatermError> {
-    use crate::license_local::{LocalLicense, save_license};
-    let lic = LocalLicense {
-        key: key.to_string(),
-        product: product.to_string(),
-        tier: tier.to_string(),
-        expires_at,
-    };
-    save_license("catable", &lic).map_err(|e| pro_err(&format!("LICENSE_SAVE_ERROR: {}", e)))
-}
-
-fn load_local_license() -> Option<crate::license_local::LocalLicense> {
-    crate::license_local::load_license("catable").ok().flatten()
-}
-
-fn is_local_license_valid() -> bool {
-    load_local_license().map_or(false, |lic| crate::license_local::is_license_valid(&lic))
-}
-
-pub fn export_license_key() -> Result<String, CatermError> {
-    load_local_license()
-        .map(|lic| lic.key)
-        .ok_or_else(|| pro_err("NO_LICENSE_EXPORT"))
-}
-
-pub fn import_license_key(key: &str) -> Result<(), CatermError> {
-    activate_license_key(key)?;
-    Ok(())
 }
 
 // ── Offline License Helpers ─────────────────────────────────────────────────────

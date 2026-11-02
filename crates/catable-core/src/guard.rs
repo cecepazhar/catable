@@ -121,6 +121,7 @@ mod tests {
             read_only,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         }
     }
 

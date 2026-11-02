@@ -1,0 +1,105 @@
+# CATable integration-test stack.
+#
+#   dev/it-setup.sh                                       # once: throwaway creds + SSH key (gitignored)
+#   docker compose -f dev/compose.test.yml up -d --wait
+#   set -a && . dev/.env && set +a
+#   cargo test -p catable-core --features it
+#
+# Credentials are never written here: they come from dev/.env, which compose
+# loads automatically because it lives next to this file.
+#
+# Database ports are published on 127.0.0.1 only (direct, non-tunnel tests).
+# Tunnel tests reach the databases by their service name (pg, mysql, mariadb)
+# through the bastion, which only works from inside the private network.
+
+name: catable-it
+
+x-db-health: &db-health
+  interval: 2s
+  timeout: 5s
+  retries: 90
+  start_period: 10s
+
+networks:
+  it:
+    name: catable-it
+
+services:
+  pg:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${CATABLE_IT_DB_USER:?run dev/it-setup.sh first}
+      POSTGRES_PASSWORD: ${CATABLE_IT_DB_PASSWORD:?run dev/it-setup.sh first}
+      POSTGRES_DB: catable_it
+    ports:
+      - "127.0.0.1:${CATABLE_IT_PG_PORT:-55432}:5432"
+    volumes:
+      - ./seed/postgres.sql:/docker-entrypoint-initdb.d/10-seed.sql:ro,z
+    healthcheck:
+      # The init-phase server listens on the unix socket only, so a TCP probe
+      # turns healthy only after the seed has finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d catable_it"]
+      <<: *db-health
+    networks: [it]
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CATABLE_IT_DB_ROOT_PASSWORD:?run dev/it-setup.sh first}
+      MYSQL_DATABASE: catable_it
+      MYSQL_USER: ${CATABLE_IT_DB_USER:?run dev/it-setup.sh first}
+      MYSQL_PASSWORD: ${CATABLE_IT_DB_PASSWORD:?run dev/it-setup.sh first}
+    ports:
+      - "127.0.0.1:${CATABLE_IT_MYSQL_PORT:-53306}:3306"
+    volumes:
+      - ./seed/mysql.sql:/docker-entrypoint-initdb.d/10-seed.sql:ro,z
+    healthcheck:
+      # The init-phase server runs with --skip-networking; TCP ping succeeds
+      # only once the real server is up (after the seed).
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      <<: *db-health
+    networks: [it]
+
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: ${CATABLE_IT_DB_ROOT_PASSWORD:?run dev/it-setup.sh first}
+      MARIADB_DATABASE: catable_it
+      MARIADB_USER: ${CATABLE_IT_DB_USER:?run dev/it-setup.sh first}
+      MARIADB_PASSWORD: ${CATABLE_IT_DB_PASSWORD:?run dev/it-setup.sh first}
+    ports:
+      - "127.0.0.1:${CATABLE_IT_MARIADB_PORT:-53307}:3306"
+    volumes:
+      - ./seed/mysql.sql:/docker-entrypoint-initdb.d/10-seed.sql:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
+      <<: *db-health
+    networks: [it]
+
+  bastion:
+    image: lscr.io/linuxserver/openssh-server:latest
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: ${CATABLE_IT_SSH_USER:?run dev/it-setup.sh first}
+      USER_PASSWORD: ${CATABLE_IT_SSH_PASSWORD:?run dev/it-setup.sh first}
+      PASSWORD_ACCESS: "true"
+      PUBLIC_KEY_FILE: /keys/id_ed25519.pub
+    ports:
+      - "127.0.0.1:${CATABLE_IT_SSH_PORT:-52222}:2222"
+    volumes:
+      - ./.secrets/id_ed25519.pub:/keys/id_ed25519.pub:ro,z
+      # The image ships with "AllowTcpForwarding no"; files in sshd_config.d
+      # are included before that line, and sshd keeps the first value.
+      - ./bastion/sshd_config.d:/config/sshd/sshd_config.d:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 2222"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      pg: { condition: service_healthy }
+      mysql: { condition: service_healthy }
+      mariadb: { condition: service_healthy }
+    networks: [it]

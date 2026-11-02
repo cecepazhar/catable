@@ -8,10 +8,20 @@ description = "CATable core library — zero-knowledge encrypted database connec
 
 [features]
 default = []
-live-db-tests = []
+# Integration tests against real servers (dev/compose.test.yml); see tests/it/main.rs.
+it = []
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+required-features = ["it"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+libtest-mimic = "0.8"
+url = "2"
+percent-encoding = "2"
 
 [dependencies]
 thiserror.workspace = true

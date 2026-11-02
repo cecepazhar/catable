@@ -68,8 +68,10 @@ impl DriverRegistry {
     /// Opens a DuckDB connection, honoring `read_only` mode.
     fn open_duckdb(conn: &ConnectionConfig) -> Result<duckdb::Connection, CatableError> {
         let path = Self::resolve_duckdb_path(conn)?;
-        if !path.exists() {
-            let _ = std::fs::File::create(&path).map_err(|e| CatableError::Io(e.to_string()))?;
+        // DuckDB creates the file itself and rejects an existing empty one.
+        // Earlier builds pre-created empty files; they hold no data, so drop them.
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() == 0) {
+            std::fs::remove_file(&path).map_err(|e| CatableError::Io(e.to_string()))?;
         }
 
         let cfg = if conn.read_only {
@@ -198,19 +200,11 @@ impl DriverRegistry {
                 }
             };
 
-            let col_names: Vec<String> = stmt
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.name().clone())
-                .collect();
-            let col_count = col_names.len();
-
             let mut rows = match stmt.query([]) {
                 Ok(r) => r,
                 Err(e) => {
                     return QueryResult {
-                        columns: col_names,
+                        columns: vec![],
                         rows: vec![],
                         rows_affected: 0,
                         duration_ms: start.elapsed().as_millis() as u64,
@@ -219,6 +213,9 @@ impl DriverRegistry {
                     };
                 }
             };
+            // The result schema is only available once the statement has run.
+            let col_names: Vec<String> = rows.as_ref().map(|s| s.column_names()).unwrap_or_default();
+            let col_count = col_names.len();
 
             let mut rows_out = Vec::new();
             while let Ok(Some(row)) = rows.next() {
@@ -858,6 +855,7 @@ mod tests {
             read_only,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         }
     }
 
@@ -950,6 +948,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
         let res = DriverRegistry::test_redis_ping(&conn).await;
         assert!(!res.success, "expected redis ping to fail: {}", res.message);
@@ -970,6 +969,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
         let res = test_connection(&conn).await;
         assert!(!res.success);
@@ -994,6 +994,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
         let res = test_connection(&conn).await;
         assert!(!res.success);

@@ -1000,6 +1000,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
 
         vault.save_connection(&cfg).unwrap();
@@ -1029,6 +1030,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
 
         vault.save_connection(&cfg).unwrap();
@@ -1109,6 +1111,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: Some("Production Fleet".into()),
+            workspace_id: Some(ws.id.clone()),
         };
         vault.save_connection(&cfg).unwrap();
 

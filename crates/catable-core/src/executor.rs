@@ -1204,6 +1204,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         }
     }
 
@@ -1249,6 +1250,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
         let res = QueryExecutor::execute_query_async(&conn, "SELECT 1").await;
         assert!(res.error.is_some());
@@ -1270,6 +1272,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
         let res = QueryExecutor::execute_query_async(&conn, "SELECT 1").await;
         assert!(res.error.is_some());
@@ -1291,6 +1294,7 @@ mod tests {
             read_only: false,
             ssh_tunnel: None,
             group_name: None,
+            workspace_id: None,
         };
         // Unbounded DELETE on prod must be blocked instantly without network call
         let res = QueryExecutor::execute_query(&conn, "DELETE FROM customers");
