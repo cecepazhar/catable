@@ -6,3 +6,5 @@ frontend/build/
 *.apk
 *.idsig
 Cargo.lock
+dev/.env
+dev/.secrets/
