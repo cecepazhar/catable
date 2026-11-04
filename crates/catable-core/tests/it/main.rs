@@ -23,6 +23,7 @@ macro_rules! ensure {
 
 mod engines;
 mod env;
+mod session;
 mod sqlite;
 mod ssh;
 
@@ -49,6 +50,10 @@ fn main() {
     trials.extend(engines::trials("mysql", &targets.mysql, true));
     trials.extend(engines::trials("mariadb", &targets.mariadb, true));
     trials.extend(engines::trials("sqlite", &targets.sqlite, false));
+    trials.extend(session::trials("postgres", &targets.pg, true));
+    trials.extend(session::trials("mysql", &targets.mysql, true));
+    trials.extend(session::trials("mariadb", &targets.mariadb, true));
+    trials.extend(session::trials("sqlite", &targets.sqlite, false));
     trials.extend(ssh::trials(&targets));
 
     let conclusion = libtest_mimic::run(&args, trials);

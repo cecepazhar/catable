@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { needsConfirmation } from '$lib/guardPolicy';
   import { onMount } from 'svelte';
   import { dbStore, type QueryResult, type GuardVerdict, type TableInfo } from '$lib/stores/database.svelte';
   import { showToast, confirmModal } from '$lib/stores/uiNotifications.svelte';
@@ -72,7 +73,7 @@
     }
   });
 
-  async function runQuery(sqlOverride?: string) {
+  async function runQuery(sqlOverride?: string, confirmed = false) {
     const sql = (sqlOverride ?? sqlQuery).trim();
     if (!sql) return;
     isExecuting = true;
@@ -88,13 +89,12 @@
         return;
       }
 
-      // Non-dev environments require explicit confirmation for warning/destructive queries
-      if (verdict.risk === 'warning' || verdict.risk === 'destructive') {
-        if (dbStore.activeConnection.environment !== 'development') {
-          confirmationPending = { verdict, sql };
-          isExecuting = false;
-          return;
-        }
+      // Destructive queries are confirmed in every environment, warnings outside Development.
+      // A query the user already confirmed must not ask again (it used to loop forever).
+      if (!confirmed && needsConfirmation(verdict.risk, dbStore.activeConnection.environment)) {
+        confirmationPending = { verdict, sql };
+        isExecuting = false;
+        return;
       }
 
       const res = await dbStore.executeQuery(sql);
@@ -114,7 +114,7 @@
     const { sql } = confirmationPending;
     confirmationPending = null;
     if (accepted) {
-      void runQuery(sql);
+      void runQuery(sql, true);
     }
   }
 
@@ -215,8 +215,13 @@
       <div class="flex-1 overflow-y-auto p-2 space-y-0.5 text-xs">
         {#each dbStore.tables as table (table.name)}
           <button
-            onclick={() => {
-              sqlQuery = `SELECT * FROM ${table.name} LIMIT 50;`;
+            onclick={async () => {
+              try {
+                // The backend quotes the table name for the active driver.
+                sqlQuery = (await dbStore.buildSelect({ table: table.name, limit: 50, with_total: false })) + ';';
+              } catch {
+                sqlQuery = `SELECT * FROM ${table.name} LIMIT 50;`;
+              }
               selectedTab = 'results';
               void refreshSafety(sqlQuery);
             }}
@@ -279,6 +284,14 @@
           <div class="flex items-center gap-2">
             {#if result?.error}
               <span class="text-rose-500 text-[10px] font-bold">ERROR</span>
+            {/if}
+            {#if result?.truncated}
+              <span
+                class="text-amber-600 dark:text-amber-400 text-[10px] font-bold"
+                title="The query returned more rows than the 10,000-row display cap. Add a LIMIT or a WHERE clause to see the rest."
+              >
+                FIRST {result.rows.length.toLocaleString()} ROWS ONLY
+              </span>
             {/if}
             {#if result && result.rows.length > 0}
               <button

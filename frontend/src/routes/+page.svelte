@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n/index.svelte';
   import {
     dbStore,
@@ -14,6 +15,9 @@
   import { getAmbientStore } from '$lib/stores/ambient.svelte';
   import { getPro } from '$lib/stores/pro.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import { portal } from '$lib/actions/portal';
+  import { errorText } from '$lib/errors';
+  import { describeConnectResult } from '$lib/connectErrors';
 
   const ambient = getAmbientStore();
   const pro = getPro();
@@ -24,7 +28,7 @@
   let selectedWorkspace = $state<string>('all');
   let revealedIds = $state<Set<string>>(new Set());
   let testingCardId = $state<string | null>(null);
-  let cardTestResults = $state<Record<string, { success: boolean; message: string; latency_ms?: number }>>({});
+  let cardTestResults = $state<Record<string, { success: boolean; message: string; hint?: string | null; latency_ms?: number }>>({});
 
   // Antares Split Modal State
   let isModalOpen = $state(false);
@@ -34,7 +38,7 @@
   let modalSearch = $state('');
   let showDbPassword = $state(false);
   let isTesting = $state(false);
-  let testResult = $state<{ success: boolean; message: string; latency_ms?: number } | null>(null);
+  let testResult = $state<{ success: boolean; message: string; hint?: string | null; latency_ms?: number } | null>(null);
 
   // SSH states in modal
   let showSshPassphrase = $state(false);
@@ -370,11 +374,7 @@
     testResult = null;
     try {
       const res = await dbStore.testConnection(form);
-      testResult = {
-        success: res.success,
-        message: res.message + (res.server_version ? ` (${res.server_version})` : ''),
-        latency_ms: res.latency_ms,
-      };
+      testResult = describeConnectResult(res);
     } catch (e: any) {
       testResult = { success: false, message: e?.message || 'Connection test failed.' };
     } finally {
@@ -387,11 +387,10 @@
     testingCardId = c.id;
     try {
       const res = await dbStore.testConnection(c);
-      cardTestResults[c.id] = {
-        success: res.success,
+      cardTestResults[c.id] = describeConnectResult({
+        ...res,
         message: res.message || (res.success ? 'Connected' : 'Failed'),
-        latency_ms: res.latency_ms,
-      };
+      });
     } catch (err: any) {
       cardTestResults[c.id] = {
         success: false,
@@ -466,7 +465,7 @@
       isModalOpen = false;
       await goto('/table-browser');
     } catch (e: any) {
-      showToast(e?.message || 'Failed to save and connect.', 'error');
+      showToast(errorText(e) || 'Failed to save and connect.', 'error');
     }
   }
 
@@ -502,7 +501,7 @@
       showToast(`Connected to "${c.name}".`, 'success');
       await goto('/table-browser');
     } catch (err: any) {
-      showToast(err?.message || 'Failed to connect.', 'error');
+      showToast(errorText(err) || 'Failed to connect.', 'error');
     }
   }
 </script>
@@ -858,6 +857,7 @@
 <!-- ============================================================== -->
 {#if isModalOpen}
   <div
+    use:portal
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 md:p-6"
     role="dialog"
     aria-modal="true"
@@ -948,7 +948,7 @@
                 <input
                   type="text"
                   bind:value={form.name}
-                  placeholder="Connection Label (e.g. Production Cluster)"
+                  placeholder="Untitled connection"
                   class="text-sm font-bold bg-transparent border-b border-transparent hover:border-neutral-300 dark:hover:border-neutral-700 focus:border-blue-500 focus:outline-none text-neutral-900 dark:text-white px-1 py-0.5 rounded transition-colors w-full max-w-sm"
                 />
                 <span class={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${ENV_COLORS[form.environment]}`}>
@@ -1371,6 +1371,32 @@
                 {/if}
               </div>
 
+              {#if !isFileDriver(form.driver)}
+                <div class="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/40 space-y-2">
+                  <div class="flex items-center justify-between gap-4">
+                    <div>
+                      <h4 class="text-xs font-bold text-neutral-900 dark:text-white">Connect Timeout</h4>
+                      <p class="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+                        Seconds to wait for the server before giving up (1–120, default 10).
+                      </p>
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      max="120"
+                      placeholder="10"
+                      value={form.connect_timeout_secs ?? ''}
+                      oninput={(e) => {
+                        const raw = (e.currentTarget as HTMLInputElement).value;
+                        const n = parseInt(raw, 10);
+                        form.connect_timeout_secs = Number.isFinite(n) ? Math.min(120, Math.max(1, n)) : null;
+                      }}
+                      class="w-20 text-xs font-mono text-right px-2 py-1.5 bg-white dark:bg-neutral-800/90 rounded-lg border border-neutral-200 dark:border-neutral-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              {/if}
+
               <div class="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/40 space-y-2">
                 <h4 class="text-xs font-bold text-neutral-900 dark:text-white">Internal Configuration Metadata</h4>
                 <div class="text-[11px] font-mono text-neutral-500 dark:text-neutral-400">
@@ -1392,6 +1418,9 @@
                 {/if}
               </div>
               <div class="mt-0.5 font-mono text-[11px]">{testResult.message}</div>
+              {#if testResult.hint}
+                <div class="mt-1 text-[11px] opacity-90">{testResult.hint}</div>
+              {/if}
             </div>
           {/if}
 

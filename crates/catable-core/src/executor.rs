@@ -32,6 +32,9 @@ pub struct QueryResult {
     pub duration_ms: u64,
     pub error: Option<String>,
     pub guard_verdict: Option<GuardVerdict>,
+    /// True when more rows existed than the 10,000-row cap returned.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +43,9 @@ pub struct ConnectionTestResult {
     pub server_version: String,
     pub latency_ms: u64,
     pub message: String,
+    /// Set for failures; lets the UI pick a specific hint.
+    #[serde(default)]
+    pub error_kind: Option<crate::error::ConnectErrorKind>,
 }
 
 pub struct QueryExecutor;
@@ -167,7 +173,7 @@ impl QueryExecutor {
     /// Lists tables and columns for the connection asynchronously.
     pub async fn list_tables_async(conn: &ConnectionConfig) -> Result<Vec<TableInfo>, CatableError> {
         let (effective_conn, _tunnel) = if conn.ssh_tunnel.as_ref().map_or(false, |t| t.enabled) {
-            match crate::tunnel::open_tunnel(conn) {
+            match crate::tunnel::open_tunnel_async(conn).await {
                 Ok(tun) => {
                     let mut c = conn.clone();
                     c.host = "127.0.0.1".into();
@@ -182,7 +188,15 @@ impl QueryExecutor {
         let conn = &effective_conn;
 
         match conn.driver {
-            DriverKind::Sqlite => Self::list_tables_sqlite(conn),
+            DriverKind::Sqlite => {
+                let c = conn.clone();
+                tokio::task::spawn_blocking(move || Self::list_tables_sqlite(&c))
+                    .await
+                    .map_err(|e| CatableError::Driver {
+                        driver: "sqlite".into(),
+                        message: format!("task failed: {e}"),
+                    })?
+            }
             DriverKind::Postgres => list_tables_postgres(conn).await,
             DriverKind::Mysql | DriverKind::MariaDb => list_tables_mysql(conn).await,
             DriverKind::DuckDb => crate::driver::DriverRegistry::list_tables_duckdb(conn).await,
@@ -206,6 +220,7 @@ impl QueryExecutor {
 
         if verdict.risk == QueryRisk::Blocked {
             return QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -219,7 +234,7 @@ impl QueryExecutor {
         }
 
         let (effective_conn, _tunnel) = if conn.ssh_tunnel.as_ref().map_or(false, |t| t.enabled) {
-            match crate::tunnel::open_tunnel(conn) {
+            match crate::tunnel::open_tunnel_async(conn).await {
                 Ok(tun) => {
                     let mut c = conn.clone();
                     c.host = "127.0.0.1".into();
@@ -228,6 +243,7 @@ impl QueryExecutor {
                 }
                 Err(e) => {
                     return QueryResult {
+                        truncated: false,
                         columns: vec![],
                         rows: vec![],
                         rows_affected: 0,
@@ -243,7 +259,26 @@ impl QueryExecutor {
         let conn = &effective_conn;
 
         match conn.driver {
-            DriverKind::Sqlite => Self::execute_query_sqlite(conn, sql, verdict, start),
+            DriverKind::Sqlite => {
+                let c = conn.clone();
+                let sql_owned = sql.to_string();
+                match tokio::task::spawn_blocking(move || {
+                    Self::execute_query_sqlite(&c, &sql_owned, verdict, start)
+                })
+                .await
+                {
+                    Ok(res) => res,
+                    Err(e) => QueryResult {
+                        truncated: false,
+                        columns: vec![],
+                        rows: vec![],
+                        rows_affected: 0,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        error: Some(format!("SQLite task failed: {e}")),
+                        guard_verdict: None,
+                    },
+                }
+            }
             DriverKind::Postgres => execute_query_postgres(conn, sql, verdict, start).await,
             DriverKind::Mysql | DriverKind::MariaDb => {
                 execute_query_mysql(conn, sql, verdict, start).await
@@ -252,6 +287,7 @@ impl QueryExecutor {
                 crate::driver::DriverRegistry::execute_query_duckdb(conn, sql, verdict, start).await
             }
             DriverKind::Redis => QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -337,6 +373,7 @@ impl QueryExecutor {
             Ok(p) => p,
             Err(e) => {
                 return QueryResult {
+                    truncated: false,
                     columns: vec![],
                     rows: vec![],
                     rows_affected: 0,
@@ -351,6 +388,7 @@ impl QueryExecutor {
             Ok(c) => c,
             Err(e) => {
                 return QueryResult {
+                    truncated: false,
                     columns: vec![],
                     rows: vec![],
                     rows_affected: 0,
@@ -373,6 +411,7 @@ impl QueryExecutor {
                 Ok(s) => s,
                 Err(e) => {
                     return QueryResult {
+                        truncated: false,
                         columns: vec![],
                         rows: vec![],
                         rows_affected: 0,
@@ -396,6 +435,7 @@ impl QueryExecutor {
                 Ok(r) => r,
                 Err(e) => {
                     return QueryResult {
+                        truncated: false,
                         columns: col_names,
                         rows: vec![],
                         rows_affected: 0,
@@ -406,6 +446,7 @@ impl QueryExecutor {
                 }
             };
 
+            let mut truncated = false;
             while let Ok(Some(row)) = query_rows.next() {
                 let mut row_vals = Vec::with_capacity(col_count);
                 for i in 0..col_count {
@@ -423,18 +464,19 @@ impl QueryExecutor {
                     };
                     row_vals.push(val);
                 }
-                rows_out.push(row_vals);
-
-                // Bound result rows for desktop performance
+                // Bound result rows for desktop performance; one more row proves truncation.
                 if rows_out.len() >= 10_000 {
+                    truncated = true;
                     break;
                 }
+                rows_out.push(row_vals);
             }
 
             let duration = start.elapsed().as_millis() as u64;
             let count = rows_out.len() as u64;
 
             QueryResult {
+                truncated,
                 columns: col_names,
                 rows: rows_out,
                 rows_affected: count,
@@ -446,6 +488,7 @@ impl QueryExecutor {
             // Mutation / DDL query
             match sqlite.execute(trimmed, params_from_iter(std::iter::empty::<&str>())) {
                 Ok(affected) => QueryResult {
+                    truncated: false,
                     columns: vec!["rows_affected".into()],
                     rows: vec![vec![serde_json::json!(affected)]],
                     rows_affected: affected as u64,
@@ -454,6 +497,7 @@ impl QueryExecutor {
                     guard_verdict: Some(verdict),
                 },
                 Err(e) => QueryResult {
+                    truncated: false,
                     columns: vec![],
                     rows: vec![],
                     rows_affected: 0,
@@ -472,7 +516,7 @@ impl QueryExecutor {
 // PostgreSQL Implementation
 // ---------------------------------------------------------------------------
 
-async fn connect_postgres(conn: &ConnectionConfig) -> Result<tokio_postgres::Client, CatableError> {
+pub(crate) async fn connect_postgres(conn: &ConnectionConfig) -> Result<tokio_postgres::Client, CatableError> {
     if conn.host.trim().is_empty() {
         return Err(CatableError::Driver {
             driver: "postgres".into(),
@@ -495,10 +539,10 @@ async fn connect_postgres(conn: &ConnectionConfig) -> Result<tokio_postgres::Cli
     } else {
         pg_config.dbname("postgres");
     }
-    pg_config.connect_timeout(std::time::Duration::from_secs(5));
+    pg_config.connect_timeout(conn.connect_timeout());
 
     match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        conn.connect_timeout(),
         pg_config.connect(tokio_postgres::NoTls),
     )
     .await
@@ -526,7 +570,7 @@ async fn connect_postgres(conn: &ConnectionConfig) -> Result<tokio_postgres::Cli
                     })?;
                 let tls = postgres_native_tls::MakeTlsConnector::new(connector);
                 let (client, connection) = match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    conn.connect_timeout(),
                     pg_config.connect(tls),
                 )
                 .await
@@ -541,7 +585,7 @@ async fn connect_postgres(conn: &ConnectionConfig) -> Result<tokio_postgres::Cli
                     Err(_) => {
                         return Err(CatableError::Driver {
                             driver: "postgres".into(),
-                            message: "Connection timed out".into(),
+                            message: format!("Connection timed out after {}s", conn.connect_timeout().as_secs()),
                         });
                     }
                 };
@@ -563,13 +607,20 @@ async fn connect_postgres(conn: &ConnectionConfig) -> Result<tokio_postgres::Cli
         }
         Err(_) => Err(CatableError::Driver {
             driver: "postgres".into(),
-            message: "Connection timed out".into(),
+            message: format!("Connection timed out after {}s", conn.connect_timeout().as_secs()),
         }),
     }
 }
 
 async fn list_tables_postgres(conn: &ConnectionConfig) -> Result<Vec<TableInfo>, CatableError> {
     let client = connect_postgres(conn).await?;
+    describe_postgres(&client).await
+}
+
+/// Reads tables + columns through an already-connected client.
+pub(crate) async fn describe_postgres(
+    client: &tokio_postgres::Client,
+) -> Result<Vec<TableInfo>, CatableError> {
 
     let table_rows = client
         .query(
@@ -673,6 +724,7 @@ async fn execute_query_postgres(
         Ok(c) => c,
         Err(e) => {
             return QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -683,6 +735,16 @@ async fn execute_query_postgres(
         }
     };
 
+    run_query_postgres(&client, sql, verdict, start).await
+}
+
+/// Runs `sql` on an already-connected client (per-call path and sessions share this).
+pub(crate) async fn run_query_postgres(
+    client: &tokio_postgres::Client,
+    sql: &str,
+    verdict: GuardVerdict,
+    start: Instant,
+) -> QueryResult {
     let trimmed = sql.trim();
     let upper = strip_leading_sql_comments(trimmed).to_uppercase();
     let is_select = upper.starts_with("SELECT")
@@ -713,6 +775,7 @@ async fn execute_query_postgres(
                 let col_count = col_names.len();
                 let mut rows_out = Vec::new();
 
+                let truncated = rows.len() > 10_000;
                 for row in rows.iter().take(10_000) {
                     let mut row_vals = Vec::with_capacity(col_count);
                     for i in 0..col_count {
@@ -726,6 +789,7 @@ async fn execute_query_postgres(
                 let count = rows_out.len() as u64;
 
                 QueryResult {
+                    truncated,
                     columns: col_names,
                     rows: rows_out,
                     rows_affected: count,
@@ -735,6 +799,7 @@ async fn execute_query_postgres(
                 }
             }
             Err(e) => QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -746,6 +811,7 @@ async fn execute_query_postgres(
     } else {
         match client.execute(trimmed, &[]).await {
             Ok(affected) => QueryResult {
+                truncated: false,
                 columns: vec!["rows_affected".into()],
                 rows: vec![vec![serde_json::json!(affected)]],
                 rows_affected: affected,
@@ -754,6 +820,7 @@ async fn execute_query_postgres(
                 guard_verdict: Some(verdict),
             },
             Err(e) => QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -872,7 +939,7 @@ fn pg_value_to_json(row: &tokio_postgres::Row, idx: usize) -> serde_json::Value 
 // MySQL / MariaDB Implementation
 // ---------------------------------------------------------------------------
 
-async fn connect_mysql(conn: &ConnectionConfig) -> Result<mysql_async::Conn, CatableError> {
+pub(crate) async fn connect_mysql(conn: &ConnectionConfig) -> Result<mysql_async::Conn, CatableError> {
     use mysql_async::prelude::Queryable;
 
     if conn.host.trim().is_empty() {
@@ -889,6 +956,9 @@ async fn connect_mysql(conn: &ConnectionConfig) -> Result<mysql_async::Conn, Cat
     let mut opts_builder = mysql_async::OptsBuilder::default();
     opts_builder = opts_builder.ip_or_hostname(conn.host.clone());
     opts_builder = opts_builder.tcp_port(conn.effective_port());
+    // Report rows *matched* by an UPDATE, not only rows whose value changed. Without this, saving
+    // an unchanged cell reports "0 rows affected" and row edits would be treated as conflicts.
+    opts_builder = opts_builder.client_found_rows(true);
 
     if !conn.user.is_empty() {
         opts_builder = opts_builder.user(Some(conn.user.clone()));
@@ -901,7 +971,7 @@ async fn connect_mysql(conn: &ConnectionConfig) -> Result<mysql_async::Conn, Cat
     }
 
     let opts: mysql_async::Opts = opts_builder.into();
-    let mut mysql_conn = match tokio::time::timeout(std::time::Duration::from_secs(5), mysql_async::Conn::new(opts)).await {
+    let mut mysql_conn = match tokio::time::timeout(conn.connect_timeout(), mysql_async::Conn::new(opts)).await {
         Ok(Ok(conn)) => conn,
         Ok(Err(e)) => {
             return Err(CatableError::Driver {
@@ -920,7 +990,7 @@ async fn connect_mysql(conn: &ConnectionConfig) -> Result<mysql_async::Conn, Cat
                 } else {
                     "mysql".into()
                 },
-                message: "Connection timed out".into(),
+                message: format!("Connection timed out after {}s", conn.connect_timeout().as_secs()),
             });
         }
     };
@@ -933,8 +1003,15 @@ async fn connect_mysql(conn: &ConnectionConfig) -> Result<mysql_async::Conn, Cat
 }
 
 async fn list_tables_mysql(conn: &ConnectionConfig) -> Result<Vec<TableInfo>, CatableError> {
-    use mysql_async::prelude::Queryable;
     let mut mysql_conn = connect_mysql(conn).await?;
+    describe_mysql(&mut mysql_conn).await
+}
+
+/// Reads tables + columns through an already-connected connection.
+pub(crate) async fn describe_mysql(
+    mysql_conn: &mut mysql_async::Conn,
+) -> Result<Vec<TableInfo>, CatableError> {
+    use mysql_async::prelude::Queryable;
 
     let table_rows: Vec<(String, String, Option<u64>)> = mysql_conn
         .query(
@@ -993,11 +1070,11 @@ async fn execute_query_mysql(
     verdict: GuardVerdict,
     start: Instant,
 ) -> QueryResult {
-    use mysql_async::prelude::Queryable;
     let mut mysql_conn = match connect_mysql(conn).await {
         Ok(c) => c,
         Err(e) => {
             return QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -1008,6 +1085,17 @@ async fn execute_query_mysql(
         }
     };
 
+    run_query_mysql(&mut mysql_conn, sql, verdict, start).await
+}
+
+/// Runs `sql` on an already-connected connection (per-call path and sessions share this).
+pub(crate) async fn run_query_mysql(
+    mysql_conn: &mut mysql_async::Conn,
+    sql: &str,
+    verdict: GuardVerdict,
+    start: Instant,
+) -> QueryResult {
+    use mysql_async::prelude::Queryable;
     let trimmed = sql.trim();
     let upper = strip_leading_sql_comments(trimmed).to_uppercase();
     let is_select = upper.starts_with("SELECT")
@@ -1029,6 +1117,7 @@ async fn execute_query_mysql(
                 match query_res.collect::<mysql_async::Row>().await {
                     Ok(raw_rows) => {
                         let mut rows_out = Vec::new();
+                        let truncated = raw_rows.len() > 10_000;
                         for row in raw_rows.into_iter().take(10_000) {
                             let values: Vec<mysql_async::Value> = row.unwrap();
                             let json_row = values.into_iter().map(mysql_value_to_json).collect();
@@ -1039,6 +1128,7 @@ async fn execute_query_mysql(
                         let count = rows_out.len() as u64;
 
                         QueryResult {
+                            truncated,
                             columns: col_names,
                             rows: rows_out,
                             rows_affected: count,
@@ -1048,6 +1138,7 @@ async fn execute_query_mysql(
                         }
                     }
                     Err(e) => QueryResult {
+                        truncated: false,
                         columns: col_names,
                         rows: vec![],
                         rows_affected: 0,
@@ -1058,6 +1149,7 @@ async fn execute_query_mysql(
                 }
             }
             Err(e) => QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -1071,6 +1163,7 @@ async fn execute_query_mysql(
             Ok(_) => {
                 let affected = mysql_conn.affected_rows();
                 QueryResult {
+                    truncated: false,
                     columns: vec!["rows_affected".into()],
                     rows: vec![vec![serde_json::json!(affected)]],
                     rows_affected: affected,
@@ -1080,6 +1173,7 @@ async fn execute_query_mysql(
                 }
             }
             Err(e) => QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -1135,7 +1229,7 @@ fn mysql_value_to_json(val: mysql_async::Value) -> serde_json::Value {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn strip_leading_sql_comments(sql: &str) -> &str {
+pub(crate) fn strip_leading_sql_comments(sql: &str) -> &str {
     let mut s = sql.trim();
     loop {
         if s.starts_with("--") {
@@ -1192,6 +1286,7 @@ mod tests {
 
     fn test_conn() -> ConnectionConfig {
         ConnectionConfig {
+            connect_timeout_secs: None,
             id: "sandbox".into(),
             name: "Sandbox DB".into(),
             driver: DriverKind::Sqlite,
@@ -1238,6 +1333,7 @@ mod tests {
     #[tokio::test]
     async fn test_postgres_unreachable_query() {
         let conn = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "pg-offline".into(),
             name: "PostgreSQL Offline".into(),
             driver: DriverKind::Postgres,
@@ -1260,6 +1356,7 @@ mod tests {
     #[tokio::test]
     async fn test_mysql_unreachable_query() {
         let conn = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "mysql-offline".into(),
             name: "MySQL Offline".into(),
             driver: DriverKind::Mysql,
@@ -1282,6 +1379,7 @@ mod tests {
     #[test]
     fn test_guardrail_blocks_dangerous_queries_before_remote_connect() {
         let conn = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "pg-prod".into(),
             name: "PostgreSQL Prod".into(),
             driver: DriverKind::Postgres,
