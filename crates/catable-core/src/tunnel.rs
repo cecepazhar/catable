@@ -139,9 +139,42 @@ fn connect_ssh_session(tunnel: &SshTunnelConfig) -> Result<Session, CatableError
     Ok(sess)
 }
 
+/// Runs the SSH handshake and reports success/failure plus round-trip time.
+pub fn test_ssh_tunnel_report(config: &SshTunnelConfig) -> SshTestResult {
+    let start = std::time::Instant::now();
+    match connect_ssh_session(config) {
+        Ok(_) => SshTestResult {
+            success: true,
+            message: "SSH handshake established successfully.".into(),
+            latency_ms: start.elapsed().as_millis() as u64,
+        },
+        Err(e) => SshTestResult {
+            success: false,
+            message: e.to_string(),
+            latency_ms: start.elapsed().as_millis() as u64,
+        },
+    }
+}
+
 pub fn test_ssh_tunnel(config: &SshTunnelConfig) -> Result<(), CatableError> {
     let _sess = connect_ssh_session(config)?;
     Ok(())
+}
+
+/// Result of an SSH handshake test (serialized to the UI).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SshTestResult {
+    pub success: bool,
+    pub message: String,
+    pub latency_ms: u64,
+}
+
+/// Non-blocking wrapper: the ssh2 handshake runs on the blocking pool.
+pub async fn open_tunnel_async(conn: &ConnectionConfig) -> Result<TunnelSession, CatableError> {
+    let conn = conn.clone();
+    tokio::task::spawn_blocking(move || open_tunnel(&conn))
+        .await
+        .map_err(|e| CatableError::Tunnel(format!("tunnel task failed: {e}")))?
 }
 
 pub fn open_tunnel(conn: &ConnectionConfig) -> Result<TunnelSession, CatableError> {

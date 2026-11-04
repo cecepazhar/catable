@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { errorText } from '$lib/errors';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { dbStore, type ConnectionConfig } from '$lib/stores/database.svelte';
@@ -136,9 +137,13 @@
   }
 
   async function handleConnect(c: ConnectionConfig) {
-    await dbStore.connect(c);
-    showToast(`Connected to "${c.name}"`, 'success');
-    void goto('/table-browser');
+    try {
+      await dbStore.connect(c);
+      showToast(`Connected to "${c.name}"`, 'success');
+      void goto('/table-browser');
+    } catch (e) {
+      showToast(`Could not connect to "${c.name}": ${errorText(e)}`, 'error');
+    }
   }
 
   async function handleExportJson() {

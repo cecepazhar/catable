@@ -1,12 +1,63 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { dbStore, type QueryResult } from '$lib/stores/database.svelte';
-  import { showToast } from '$lib/stores/uiNotifications.svelte';
+  import { dbStore, type QueryResult, type TableStructure } from '$lib/stores/database.svelte';
+  import { showToast, confirmModal } from '$lib/stores/uiNotifications.svelte';
   import { goto } from '$app/navigation';
   import LoadingState from '$lib/components/LoadingState.svelte';
+  import { errorText } from '$lib/errors';
   import RowDetailsInspector from '$lib/components/RowDetailsInspector.svelte';
+  import EditableGrid from '$lib/grid/EditableGrid.svelte';
+  import { EditStaging } from '$lib/grid/staging.svelte';
+  import { BrowseQuery } from '$lib/grid/browseQuery.svelte';
+  import FilterBar from '$lib/grid/FilterBar.svelte';
+  import StructurePanel from '$lib/grid/StructurePanel.svelte';
+  import { portal } from '$lib/actions/portal';
 
   const PAGE_SIZE = 50;
+  const staging = new EditStaging();
+  const query = new BrowseQuery();
+  let viewTab = $state<'data' | 'structure' | 'ddl'>('data');
+  let structure = $state<TableStructure | null>(null);
+  let structureLoading = $state(false);
+  let structureError = $state<string | null>(null);
+  const structureCache = new Map<string, TableStructure>();
+
+  /** Single-column foreign keys: column -> the row it points at. */
+  const fkTargets = $derived.by(() => {
+    const map = new Map<string, { table: string; column: string }>();
+    for (const fk of structure?.foreign_keys ?? []) {
+      if (fk.columns.length === 1 && fk.ref_columns.length === 1) {
+        map.set(fk.columns[0], { table: fk.ref_table, column: fk.ref_columns[0] });
+      }
+    }
+    return map;
+  });
+  const fkColumns = $derived(new Set(fkTargets.keys()));
+
+  async function loadStructure(name: string, force = false) {
+    const key = `${dbStore.activeConnection.id}:${name}`;
+    if (!force && structureCache.has(key)) {
+      structure = structureCache.get(key)!;
+      structureError = null;
+      return;
+    }
+    structureLoading = true;
+    structureError = null;
+    try {
+      const loaded = await dbStore.describeTable(name);
+      if (dbStore.activeTable !== name) return; // the user moved on while this was loading
+      structureCache.set(key, loaded);
+      structure = loaded;
+    } catch (e) {
+      structure = null;
+      structureError = errorText(e);
+    } finally {
+      structureLoading = false;
+    }
+  }
+  let commitSql = $state<string[] | null>(null);
+  let commitError = $state<string | null>(null);
+  let isCommitting = $state(false);
   let offset = $state(0);
   let previewResult = $state<QueryResult | null>(null);
   let isPreviewLoading = $state(false);
@@ -17,7 +68,20 @@
   const activeTableInfo = $derived(
     dbStore.tables.find((t) => t.name === dbStore.activeTable)
   );
-  const totalRows = $derived(activeTableInfo?.row_count ?? 0);
+  const EDIT_DRIVERS = ['sqlite', 'postgres', 'mysql', 'mariadb'];
+  /** Why the grid is read-only, or null when rows can be edited. */
+  const editBlockedReason = $derived.by((): string | null => {
+    const conn = dbStore.activeConnection;
+    if (!EDIT_DRIVERS.includes(conn.driver)) return 'Editing rows is not supported for this database type yet.';
+    if (conn.read_only) return 'This connection is read-only.';
+    if (activeTableInfo && /view/i.test(activeTableInfo.table_type)) return 'Views cannot be edited.';
+    return staging.readOnlyReason;
+  });
+  const canEdit = $derived(editBlockedReason === null && !!previewResult && !previewResult.error);
+
+  /** Exact filtered total from the backend; falls back to the (possibly estimated) schema count. */
+  let browseTotal = $state<number | null>(null);
+  const totalRows = $derived(browseTotal ?? activeTableInfo?.row_count ?? 0);
   const currentPage = $derived(Math.floor(offset / PAGE_SIZE) + 1);
   const totalPages = $derived(Math.max(1, Math.ceil(totalRows / PAGE_SIZE)));
 
@@ -35,44 +99,158 @@
     offset = Math.max(0, newOffset);
     previewResult = null;
     try {
-      const escapedName = `"${name.replace(/"/g, '""')}"`;
-      const res = await dbStore.executeQuery(
-        `SELECT * FROM ${escapedName} LIMIT ${PAGE_SIZE} OFFSET ${offset}`
-      );
-      previewResult = res;
+      // Count on the first page / after a table switch only; paging keeps the known total.
+      const res = await dbStore.browseTable({
+        table: name,
+        limit: PAGE_SIZE,
+        offset,
+        with_total: offset === 0 || browseTotal === null,
+        ...query.toRequestParts(activeTableInfo?.columns ?? []),
+      });
+      previewResult = res.result;
+      if (res.total !== null) browseTotal = res.total;
+      if (res.result.error) showToast(res.result.error, 'error');
+      void loadStructure(name);
+      staging.load({
+        table: name,
+        columns: res.result.columns,
+        rows: res.result.rows,
+        keyColumns: (activeTableInfo?.columns ?? []).filter((c) => c.is_pk).map((c) => c.name),
+        columnTypes: Object.fromEntries((activeTableInfo?.columns ?? []).map((c) => [c.name, c.data_type])),
+      });
+    } catch (e) {
+      previewResult = { columns: [], rows: [], rows_affected: 0, duration_ms: 0, error: errorText(e) };
     } finally {
       isPreviewLoading = false;
     }
   }
 
-  function handleTableSelect(name: string) {
+  /** Staged edits are lost when the page changes, so ask first. */
+  async function confirmDiscard(): Promise<boolean> {
+    if (!staging.hasPending) return true;
+    return confirmModal(
+      `You have ${staging.pendingCount} uncommitted change${staging.pendingCount === 1 ? '' : 's'}. Discard them?`,
+      'Discard changes?',
+      true,
+      'Discard'
+    );
+  }
+
+  async function handleTableSelect(name: string) {
+    if (name !== dbStore.activeTable && !(await confirmDiscard())) return;
     dbStore.activeTable = name;
     offset = 0;
+    browseTotal = null;
+    query.reset();
     void fetchTableData(name, 0);
   }
 
-  function handlePrev() {
-    if (offset > 0 && dbStore.activeTable) {
+  /** Filters, search and sort are applied by the backend over the whole table, from page 1. */
+  async function applyQuery() {
+    if (!dbStore.activeTable || !(await confirmDiscard())) return;
+    offset = 0;
+    browseTotal = null; // the filtered total differs
+    void fetchTableData(dbStore.activeTable, 0);
+  }
+
+  async function clearQuery() {
+    query.clearFilters();
+    await applyQuery();
+  }
+
+  /** Opens another table, optionally filtered to the one row a foreign key points at. */
+  async function openTable(table: string, column?: string, value?: string) {
+    if (!dbStore.tables.some((t) => t.name === table)) {
+      showToast(`Table "${table}" was not found in this database.`, 'error');
+      return;
+    }
+    if (!(await confirmDiscard())) return;
+    dbStore.activeTable = table;
+    offset = 0;
+    browseTotal = null;
+    query.reset();
+    if (column !== undefined && value !== undefined) {
+      query.addFilter(column);
+      query.filters[0].value = value;
+    }
+    viewTab = 'data';
+    void fetchTableData(table, 0);
+  }
+
+  function followFk(column: string, value: string) {
+    const target = fkTargets.get(column);
+    if (target) void openTable(target.table, target.column, value);
+  }
+
+  async function sortBy(column: string, additive: boolean) {
+    query.toggleSort(column, additive);
+    await applyQuery();
+  }
+
+  async function handlePrev() {
+    if (offset > 0 && dbStore.activeTable && (await confirmDiscard())) {
       void fetchTableData(dbStore.activeTable, Math.max(0, offset - PAGE_SIZE));
     }
   }
 
-  function handleNext() {
-    if (offset + PAGE_SIZE < totalRows && dbStore.activeTable) {
+  async function handleNext() {
+    if (offset + PAGE_SIZE < totalRows && dbStore.activeTable && (await confirmDiscard())) {
       void fetchTableData(dbStore.activeTable, offset + PAGE_SIZE);
     }
   }
 
-  function handleFirst() {
-    if (offset !== 0 && dbStore.activeTable) {
+  async function handleFirst() {
+    if (offset !== 0 && dbStore.activeTable && (await confirmDiscard())) {
       void fetchTableData(dbStore.activeTable, 0);
     }
   }
 
-  function handleLast() {
-    if (dbStore.activeTable) {
+  async function handleLast() {
+    if (dbStore.activeTable && (await confirmDiscard())) {
       const lastOffset = Math.max(0, (totalPages - 1) * PAGE_SIZE);
       void fetchTableData(dbStore.activeTable, lastOffset);
+    }
+  }
+
+  // ---- Commit flow: preview the real SQL first, then apply in one transaction --------------------
+  async function openCommit() {
+    if (!staging.hasPending) return;
+    commitError = null;
+    try {
+      commitSql = await dbStore.previewChanges(staging.toChangeSet());
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
+  }
+
+  async function applyCommit() {
+    if (!commitSql || isCommitting) return;
+    isCommitting = true;
+    commitError = null;
+    try {
+      const res = await dbStore.applyChanges(staging.toChangeSet());
+      commitSql = null;
+      showToast(`Saved ${res.statements} change${res.statements === 1 ? '' : 's'}.`, 'success');
+      if (dbStore.activeTable) {
+        browseTotal = null; // row count may have changed
+        await fetchTableData(dbStore.activeTable, offset);
+      }
+    } catch (e) {
+      // Nothing was saved (the backend rolled back); keep the staged edits so they can be fixed.
+      commitError = errorText(e);
+    } finally {
+      isCommitting = false;
+    }
+  }
+
+  function discardChanges() {
+    staging.discard();
+  }
+
+  function onWindowKey(e: KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && staging.hasPending) {
+      e.preventDefault();
+      if (commitSql === null) void openCommit();
     }
   }
 
@@ -86,12 +264,16 @@
     inspectorOpen = false;
   }
 
-  function openInSqlStudio() {
+  async function openInSqlStudio() {
     const tableName = dbStore.activeTable;
     if (!tableName) return;
-    const escapedName = `"${tableName.replace(/"/g, '""')}"`;
-    const sql = `SELECT * FROM ${escapedName} LIMIT 50;`;
-    void goto(`/sql-studio?query=${encodeURIComponent(sql)}`);
+    try {
+      // The backend quotes identifiers for the active driver.
+      const sql = await dbStore.buildSelect({ table: tableName, limit: 50, with_total: false });
+      void goto(`/sql-studio?query=${encodeURIComponent(sql + ';')}`);
+    } catch (e) {
+      showToast(errorText(e), 'error');
+    }
   }
 
   const columnTypes = $derived(
@@ -165,69 +347,36 @@
 
     <!-- Main Content -->
     <div class="flex-1 flex flex-col gap-4 min-w-0 overflow-y-auto">
-      <!-- Structure Card -->
+      <!-- View tabs: Data | Structure | DDL -->
       {#if activeTableInfo}
-        <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl p-4 space-y-3 shrink-0">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <span class="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">Column Structure</span>
-              <span class="text-[10px] font-mono bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-600 dark:text-neutral-400">
-                {activeTableInfo.columns.length} columns
-              </span>
-            </div>
-            <span class="text-[10px] font-mono text-neutral-400 uppercase">{activeTableInfo.table_type}</span>
-          </div>
-
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-neutral-50 dark:bg-neutral-800/60 text-neutral-500 uppercase text-[10px] tracking-wider border-b border-neutral-200 dark:border-neutral-800">
-                <tr>
-                  <th class="py-2 px-3">Column</th>
-                  <th class="py-2 px-3">Data Type</th>
-                  <th class="py-2 px-3">Constraints & Attributes</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-neutral-100 dark:divide-neutral-800/80">
-                {#each activeTableInfo.columns as col}
-                  <tr class="hover:bg-neutral-50 dark:hover:bg-neutral-800/20 transition-colors">
-                    <td class="py-2 px-3 font-mono font-semibold text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
-                      {#if col.is_pk}
-                        <span class="text-amber-500 text-xs" title="Primary Key">🔑</span>
-                      {:else if col.name.endsWith('_id')}
-                        <span class="text-blue-500 text-xs" title="Foreign Key Column">🔗</span>
-                      {:else}
-                        <span class="text-neutral-300 dark:text-neutral-600">·</span>
-                      {/if}
-                      {col.name}
-                    </td>
-                    <td class="py-2 px-3 font-mono text-neutral-500 dark:text-neutral-400">
-                      <span class="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
-                        {col.data_type || 'TEXT'}
-                      </span>
-                    </td>
-                    <td class="py-2 px-3 space-x-1.5">
-                      {#if col.is_pk}
-                        <span class="bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 font-bold text-[10px] px-1.5 py-0.5 rounded uppercase">
-                          PRIMARY KEY
-                        </span>
-                      {/if}
-                      {#if col.not_null}
-                        <span class="bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 font-bold text-[10px] px-1.5 py-0.5 rounded uppercase">
-                          NOT NULL
-                        </span>
-                      {:else}
-                        <span class="text-neutral-400 text-[10px] font-mono">NULLABLE</span>
-                      {/if}
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+        <div class="flex items-center gap-1 shrink-0" role="tablist">
+          {#each [['data', 'Data'], ['structure', 'Structure'], ['ddl', 'DDL']] as [id, label]}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewTab === id}
+              onclick={() => (viewTab = id as 'data' | 'structure' | 'ddl')}
+              class={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer transition-colors ${viewTab === id ? 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400' : 'border-transparent text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800'}`}
+            >
+              {label}
+            </button>
+          {/each}
+          <span class="ml-auto text-[10px] font-mono text-neutral-400 uppercase">{activeTableInfo.table_type}</span>
         </div>
       {/if}
 
+      {#if viewTab !== 'data'}
+        <StructurePanel
+          {structure}
+          loading={structureLoading}
+          error={structureError}
+          mode={viewTab === 'ddl' ? 'ddl' : 'structure'}
+          onOpenTable={(t) => void openTable(t)}
+        />
+      {/if}
+
       <!-- Data Preview Grid & Pagination -->
+      {#if viewTab === 'data'}
       <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl flex-1 min-h-[220px] flex flex-col">
         <div class="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-neutral-50 dark:bg-neutral-800/40">
           <div class="flex items-center gap-2">
@@ -236,6 +385,37 @@
               <span class="text-[10px] font-mono text-neutral-400">
                 · Showing {totalRows === 0 ? 0 : offset + 1}–{Math.min(offset + previewResult.rows.length, totalRows)} of {totalRows.toLocaleString()} rows
               </span>
+            {/if}
+          </div>
+
+          <!-- Edit toolbar -->
+          <div class="flex items-center gap-1.5 mr-3">
+            {#if editBlockedReason && previewResult && !previewResult.error}
+              <span class="text-[10px] text-neutral-400" title={editBlockedReason}>Read-only</span>
+            {/if}
+            {#if canEdit}
+              <button
+                onclick={() => staging.addRow()}
+                class="px-2 py-1 text-xs border border-neutral-200 dark:border-neutral-700 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                title="Add a new row"
+              >
+                + Row
+              </button>
+            {/if}
+            {#if staging.hasPending}
+              <button
+                onclick={discardChanges}
+                class="px-2 py-1 text-xs border border-neutral-200 dark:border-neutral-700 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-300 cursor-pointer"
+              >
+                Discard
+              </button>
+              <button
+                onclick={() => void openCommit()}
+                class="px-2.5 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded cursor-pointer"
+                title="Review the SQL, then save (Ctrl+S)"
+              >
+                Commit Changes ({staging.pendingCount})
+              </button>
             {/if}
           </div>
 
@@ -278,41 +458,34 @@
           </div>
         </div>
 
+        <FilterBar
+          {query}
+          columns={activeTableInfo?.columns ?? []}
+          onApply={() => void applyQuery()}
+          onClear={() => void clearQuery()}
+        />
+
         <div class="flex-1 overflow-auto">
           {#if isPreviewLoading}
             <LoadingState message="Loading page data..." />
           {:else if previewResult && previewResult.columns.length > 0}
-            <table class="w-full text-left text-xs border-collapse">
-              <thead class="sticky top-0 bg-neutral-50 dark:bg-neutral-800 text-neutral-500 uppercase text-[10px] tracking-wider border-b border-neutral-200 dark:border-neutral-800 z-10">
-                <tr>
-                  <th class="py-2.5 px-3 font-semibold w-12 bg-neutral-50 dark:bg-neutral-800 text-right select-none">#</th>
-                  {#each previewResult.columns as col}
-                    <th class="py-2.5 px-3 font-semibold min-w-[120px]">{col}</th>
-                  {/each}
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-neutral-100 dark:divide-neutral-800/80">
-                {#each previewResult.rows as row, i}
-                  <tr
-                    class={`transition-colors cursor-pointer ${selectedRowIndex === i ? 'bg-blue-500/10 hover:bg-blue-500/15' : 'hover:bg-neutral-50 dark:hover:bg-neutral-800/30'}`}
-                    onclick={() => handleRowClick(row, i)}
-                  >
-                    <td class="py-2 px-3 font-mono text-neutral-400 text-[10px] bg-neutral-50/50 dark:bg-neutral-800/20 text-right select-none">
-                      {offset + i + 1}
-                    </td>
-                    {#each row as val}
-                      <td class="py-2 px-3 font-mono text-neutral-700 dark:text-neutral-300 whitespace-nowrap">
-                        {#if val === null}
-                          <span class="italic text-neutral-400">NULL</span>
-                        {:else}
-                          {String(val)}
-                        {/if}
-                      </td>
-                    {/each}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
+            <EditableGrid
+              {staging}
+              {offset}
+              {selectedRowIndex}
+              editable={canEdit}
+              onRowClick={handleRowClick}
+              sortOf={(c) => query.sortState(c)}
+              onSort={sortBy}
+              {fkColumns}
+              onFollowFk={followFk}
+            />
+          {:else if previewResult?.error}
+            <div class="h-full flex items-center justify-center p-6">
+              <div class="max-w-xl p-3 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs font-mono">
+                {previewResult.error}
+              </div>
+            </div>
           {:else}
             <div class="h-full flex items-center justify-center text-neutral-400 text-xs">
               Select a table or change page to preview its contents.
@@ -320,6 +493,7 @@
           {/if}
         </div>
       </div>
+      {/if}
     </div>
 
     <!-- Row Details Inspector -->
@@ -336,3 +510,47 @@
     />
   </div>
 </div>
+
+<svelte:window onkeydown={onWindowKey} />
+
+{#if commitSql}
+  <div
+    use:portal
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Review changes"
+  >
+    <div class="w-full max-w-2xl max-h-[80vh] flex flex-col bg-white dark:bg-[#121212] border border-neutral-200 dark:border-neutral-800 rounded-2xl shadow-2xl overflow-hidden">
+      <div class="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+        <h3 class="text-sm font-bold text-neutral-900 dark:text-white">Review changes</h3>
+        <p class="text-[11px] text-neutral-500 mt-0.5">
+          {commitSql.length} statement{commitSql.length === 1 ? '' : 's'} on
+          <span class="font-mono">{staging.table}</span>, applied together in one transaction.
+        </p>
+      </div>
+      <pre class="flex-1 overflow-auto p-4 text-[11px] font-mono leading-relaxed bg-neutral-50 dark:bg-neutral-900/60 text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap break-all">{commitSql.join(';\n\n')};</pre>
+      {#if commitError}
+        <div class="mx-4 mt-3 p-3 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-[11px] font-mono whitespace-pre-wrap break-words">
+          {commitError}
+        </div>
+      {/if}
+      <div class="p-4 flex items-center justify-end gap-2">
+        <button
+          onclick={() => (commitSql = null)}
+          disabled={isCommitting}
+          class="px-3.5 py-2 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50 cursor-pointer"
+        >
+          {commitError ? 'Back to editing' : 'Cancel'}
+        </button>
+        <button
+          onclick={() => void applyCommit()}
+          disabled={isCommitting}
+          class="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg disabled:opacity-50 cursor-pointer"
+        >
+          {isCommitting ? 'Saving…' : commitError ? 'Try again' : 'Apply to database'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}

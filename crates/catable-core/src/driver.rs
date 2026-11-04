@@ -34,11 +34,15 @@ impl DriverRegistry {
     /// features that would fail at runtime (PRD §2.3 capability matrix).
     pub fn capabilities(driver: DriverKind) -> &'static str {
         match driver {
-            DriverKind::Sqlite | DriverKind::Postgres | DriverKind::Mysql | DriverKind::MariaDb => {
-                "browse,inline_edit,sql_editor,cancel_query,explain_visual,erd,alter_table,read_only_mode"
+            // Only what works end to end. `cancel_query`, `explain_visual` and `alter_table` are
+            // added back by the session that implements each of them.
+            DriverKind::Sqlite => "browse,inline_edit,sql_editor,erd,read_only_mode",
+            DriverKind::Postgres | DriverKind::Mysql | DriverKind::MariaDb => {
+                "browse,inline_edit,sql_editor,erd,read_only_mode,ssh_tunnel"
             }
-            DriverKind::DuckDb => "browse,sql_editor,explain_visual,read_only_mode",
-            DriverKind::Redis => "browse,sql_editor,ssh_tunnel",
+            DriverKind::DuckDb => "browse,sql_editor,read_only_mode",
+            // Connection test / ping only: there is no key browser and no SQL.
+            DriverKind::Redis => "ssh_tunnel",
         }
     }
 
@@ -98,7 +102,7 @@ impl DriverRegistry {
         let mut stmt = db
             .prepare(
                 "SELECT table_name, column_name, data_type, \
-                 CASE WHEN column_default = 'nextval(' THEN true ELSE false END as is_pk, \
+                 false as is_pk, \
                  NOT is_nullable as not_null \
                  FROM information_schema.columns \
                  WHERE table_schema = 'main' \
@@ -124,9 +128,26 @@ impl DriverRegistry {
             raw_cols.push((tbl, col, dt, is_pk, not_null));
         }
 
+        // Primary-key columns come from DuckDB's constraint catalog. Best effort: if the catalog
+        // query is unavailable the columns are simply not flagged.
+        let mut pk_cols: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        if let Ok(mut pk_stmt) = db.prepare(
+            "SELECT table_name, unnest(constraint_column_names) \
+             FROM duckdb_constraints() \
+             WHERE constraint_type = 'PRIMARY KEY' AND schema_name = 'main'",
+        ) && let Ok(mut pk_rows) = pk_stmt.query([])
+        {
+            while let Ok(Some(r)) = pk_rows.next() {
+                let t: String = r.get(0).unwrap_or_default();
+                let c: String = r.get(1).unwrap_or_default();
+                pk_cols.insert((t, c));
+            }
+        }
+
         let mut table_map: HashMap<String, TableInfo> = HashMap::new();
 
         for (table_name, column_name, data_type, is_pk, not_null) in raw_cols {
+            let is_pk = is_pk || pk_cols.contains(&(table_name.clone(), column_name.clone()));
             let entry = table_map.entry(table_name.clone()).or_insert_with(|| TableInfo {
                 name: table_name.clone(),
                 table_type: "table".into(),
@@ -170,6 +191,7 @@ impl DriverRegistry {
             Ok(db) => db,
             Err(e) => {
                 return QueryResult {
+                    truncated: false,
                     columns: vec![],
                     rows: vec![],
                     rows_affected: 0,
@@ -190,6 +212,7 @@ impl DriverRegistry {
                 Ok(s) => s,
                 Err(e) => {
                     return QueryResult {
+                        truncated: false,
                         columns: vec![],
                         rows: vec![],
                         rows_affected: 0,
@@ -204,6 +227,7 @@ impl DriverRegistry {
                 Ok(r) => r,
                 Err(e) => {
                     return QueryResult {
+                        truncated: false,
                         columns: vec![],
                         rows: vec![],
                         rows_affected: 0,
@@ -218,6 +242,7 @@ impl DriverRegistry {
             let col_count = col_names.len();
 
             let mut rows_out = Vec::new();
+            let mut truncated = false;
             while let Ok(Some(row)) = rows.next() {
                 let mut row_vals = Vec::with_capacity(col_count);
                 for i in 0..col_count {
@@ -227,15 +252,16 @@ impl DriverRegistry {
                     };
                     row_vals.push(val);
                 }
-                rows_out.push(row_vals);
-
                 if rows_out.len() >= 10_000 {
+                    truncated = true;
                     break;
                 }
+                rows_out.push(row_vals);
             }
 
             let count = rows_out.len() as u64;
             QueryResult {
+                truncated,
                 columns: col_names,
                 rows: rows_out,
                 rows_affected: count,
@@ -247,6 +273,7 @@ impl DriverRegistry {
             // Write / DDL query
             if conn.read_only {
                 return QueryResult {
+                    truncated: false,
                     columns: vec![],
                     rows: vec![],
                     rows_affected: 0,
@@ -258,6 +285,7 @@ impl DriverRegistry {
 
             match db.execute(trimmed, []) {
                 Ok(affected) => QueryResult {
+                    truncated: false,
                     columns: vec!["rows_affected".into()],
                     rows: vec![vec![serde_json::json!(affected)]],
                     rows_affected: affected as u64,
@@ -266,6 +294,7 @@ impl DriverRegistry {
                     guard_verdict: Some(verdict),
                 },
                 Err(e) => QueryResult {
+                    truncated: false,
                     columns: vec![],
                     rows: vec![],
                     rows_affected: 0,
@@ -286,6 +315,7 @@ impl DriverRegistry {
         let verdict = crate::guard::GuardrailEngine::evaluate(sql, conn);
         if verdict.risk == crate::guard::QueryRisk::Blocked {
             return QueryResult {
+                truncated: false,
                 columns: vec![],
                 rows: vec![],
                 rows_affected: 0,
@@ -339,12 +369,14 @@ impl DriverRegistry {
         match Self::redis_paired(conn).await {
             Ok(client) => match client.send::<redis_async::resp::RespValue>(redis_cmd(&["PING"])).await {
                 Ok(_) => ConnectionTestResult {
+                    error_kind: None,
                     success: true,
                     server_version: "Redis (PING OK)".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
                     message: format!("Successfully connected to Redis at {}", addr),
                 },
                 Err(e) => ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
@@ -352,6 +384,7 @@ impl DriverRegistry {
                 },
             },
             Err(e) => ConnectionTestResult {
+                error_kind: None,
                 success: false,
                 server_version: "Unknown".into(),
                 latency_ms: start.elapsed().as_millis() as u64,
@@ -532,14 +565,18 @@ fn duckdb_val_to_json(v: duckdb::types::ValueRef) -> serde_json::Value {
 
 /// Tests a database connection with real TCP / handshake.
 pub async fn test_connection(conn: &ConnectionConfig) -> ConnectionTestResult {
-    test_connection_impl(conn).await
+    let mut res = test_connection_impl(conn).await;
+    if !res.success && res.error_kind.is_none() {
+        res.error_kind = Some(crate::error::ConnectErrorKind::classify(&res.message));
+    }
+    res
 }
 
 async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
     let start = Instant::now();
 
     let (effective_conn, _tunnel) = if conn.ssh_tunnel.as_ref().map_or(false, |t| t.enabled) {
-        match crate::tunnel::open_tunnel(conn) {
+        match crate::tunnel::open_tunnel_async(conn).await {
             Ok(tun) => {
                 let mut c = conn.clone();
                 c.host = "127.0.0.1".into();
@@ -548,6 +585,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
             }
             Err(e) => {
                 return ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
@@ -570,6 +608,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                             .unwrap_or_else(|_| "3.x".into());
                         let latency = start.elapsed().as_millis() as u64;
                         ConnectionTestResult {
+                            error_kind: None,
                             success: true,
                             server_version: format!("SQLite v{}", ver),
                             latency_ms: latency,
@@ -580,6 +619,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                         }
                     }
                     Err(e) => ConnectionTestResult {
+                        error_kind: None,
                         success: false,
                         server_version: "Unknown".into(),
                         latency_ms: start.elapsed().as_millis() as u64,
@@ -587,6 +627,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                     },
                 },
                 Err(e) => ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
@@ -597,6 +638,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
         DriverKind::Postgres => {
             if conn.host.trim().is_empty() {
                 return ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
@@ -619,10 +661,10 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
             } else {
                 pg_config.dbname("postgres");
             }
-            pg_config.connect_timeout(std::time::Duration::from_secs(5));
+            pg_config.connect_timeout(conn.connect_timeout());
 
             let client_res = match tokio::time::timeout(
-                std::time::Duration::from_secs(5),
+                conn.connect_timeout(),
                 pg_config.connect(tokio_postgres::NoTls),
             )
             .await
@@ -643,7 +685,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                             Ok(connector) => {
                                 let tls = postgres_native_tls::MakeTlsConnector::new(connector);
                                 match tokio::time::timeout(
-                                    std::time::Duration::from_secs(5),
+                                    conn.connect_timeout(),
                                     pg_config.connect(tls),
                                 )
                                 .await
@@ -655,7 +697,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                                         Ok(client)
                                     }
                                     Ok(Err(tls_err)) => Err(tls_err.to_string()),
-                                    Err(_) => Err("Connection timed out".to_string()),
+                                    Err(_) => Err(format!("Connection timed out after {}s", conn.connect_timeout().as_secs())),
                                 }
                             }
                             Err(e) => Err(format!("TLS setup failed: {}", e)),
@@ -664,7 +706,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                         Err(err.to_string())
                     }
                 }
-                Err(_) => Err("Connection timed out".to_string()),
+                Err(_) => Err(format!("Connection timed out after {}s", conn.connect_timeout().as_secs())),
             };
 
             match client_res {
@@ -673,6 +715,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                         let version_str: String = row.get(0);
                         let latency = start.elapsed().as_millis() as u64;
                         ConnectionTestResult {
+                            error_kind: None,
                             success: true,
                             server_version: version_str,
                             latency_ms: latency,
@@ -684,6 +727,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                         }
                     }
                     Err(e) => ConnectionTestResult {
+                        error_kind: None,
                         success: false,
                         server_version: "Unknown".into(),
                         latency_ms: start.elapsed().as_millis() as u64,
@@ -691,6 +735,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                     },
                 },
                 Err(e) => ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
@@ -701,6 +746,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
         DriverKind::Mysql | DriverKind::MariaDb => {
             if conn.host.trim().is_empty() {
                 return ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
@@ -728,7 +774,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
             } else {
                 "mysql"
             };
-            match tokio::time::timeout(std::time::Duration::from_secs(5), mysql_async::Conn::new(opts)).await {
+            match tokio::time::timeout(conn.connect_timeout(), mysql_async::Conn::new(opts)).await {
                 Ok(Ok(mut mysql_conn)) => {
                     match mysql_conn.query_first::<String, _>("SELECT version()").await {
                         Ok(Some(ver)) => {
@@ -739,6 +785,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                                 "MySQL"
                             };
                             ConnectionTestResult {
+                                error_kind: None,
                                 success: true,
                                 server_version: format!("{} v{}", kind, ver),
                                 latency_ms: latency,
@@ -751,6 +798,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                             }
                         }
                         Ok(None) => ConnectionTestResult {
+                            error_kind: None,
                             success: true,
                             server_version: "MySQL / MariaDB".into(),
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -761,6 +809,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                             ),
                         },
                         Err(e) => ConnectionTestResult {
+                            error_kind: None,
                             success: false,
                             server_version: "Unknown".into(),
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -769,16 +818,18 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                     }
                 }
                 Ok(Err(e)) => ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
                     message: format!("{} connection failed: {}", driver_name, e),
                 },
                 Err(_) => ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
-                    message: format!("{} connection timed out", driver_name),
+                    message: format!("{} connection timed out after {}s", driver_name, conn.connect_timeout().as_secs()),
                 },
             }
         }
@@ -795,6 +846,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                     };
                     match duckdb::Connection::open_with_flags(&path, cfg) {
                         Ok(_) => ConnectionTestResult {
+                            error_kind: None,
                             success: true,
                             server_version: "DuckDB (local engine)".into(),
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -804,6 +856,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                             ),
                         },
                         Err(e) => ConnectionTestResult {
+                            error_kind: None,
                             success: false,
                             server_version: "Unknown".into(),
                             latency_ms: start.elapsed().as_millis() as u64,
@@ -812,6 +865,7 @@ async fn test_connection_impl(conn: &ConnectionConfig) -> ConnectionTestResult {
                     }
                 }
                 Err(e) => ConnectionTestResult {
+                    error_kind: None,
                     success: false,
                     server_version: "Unknown".into(),
                     latency_ms: start.elapsed().as_millis() as u64,
@@ -836,6 +890,51 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_do_not_advertise_unimplemented_features() {
+        // Regression: these were listed while no backend code existed for them.
+        for driver in [
+            DriverKind::Sqlite,
+            DriverKind::Postgres,
+            DriverKind::Mysql,
+            DriverKind::MariaDb,
+            DriverKind::DuckDb,
+            DriverKind::Redis,
+        ] {
+            let caps = DriverRegistry::capabilities(driver);
+            for missing in ["cancel_query", "explain_visual", "alter_table"] {
+                assert!(!caps.contains(missing), "{driver:?} must not advertise `{missing}`");
+            }
+            // `inline_edit` is advertised exactly where Session::apply_changes works.
+            assert_eq!(
+                caps.contains("inline_edit"),
+                crate::mutation::supports_row_edit(driver),
+                "{driver:?}: inline_edit must match mutation::supports_row_edit"
+            );
+        }
+        assert!(!DriverRegistry::capabilities(DriverKind::Redis).contains("sql_editor"));
+    }
+
+    #[tokio::test]
+    async fn duckdb_reports_primary_key_columns() {
+        let path = std::env::temp_dir().join(format!("catable-pk-{}.duckdb", uuid::Uuid::new_v4()));
+        let conn = duckdb_conn(path.to_str().unwrap(), false);
+        {
+            let db = DriverRegistry::open_duckdb(&conn).unwrap();
+            db.execute_batch(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, note VARCHAR);",
+            )
+            .unwrap();
+        }
+        let tables = DriverRegistry::list_tables_duckdb(&conn).await.unwrap();
+        let t = tables.iter().find(|t| t.name == "t").expect("table t is listed");
+        let pk: Vec<&str> = t.columns.iter().filter(|c| c.is_pk).map(|c| c.name.as_str()).collect();
+        assert_eq!(pk, vec!["id"], "only the PRIMARY KEY column is flagged");
+        let name = t.columns.iter().find(|c| c.name == "name").unwrap();
+        assert!(name.not_null);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn duckdb_does_not_get_erd() {
         let caps = DriverRegistry::capabilities(DriverKind::DuckDb);
         assert!(!caps.contains("erd"));
@@ -843,6 +942,7 @@ mod tests {
 
     fn duckdb_conn(database: &str, read_only: bool) -> ConnectionConfig {
         ConnectionConfig {
+            connect_timeout_secs: None,
             id: "duckdb-test".into(),
             name: "DuckDB Test".into(),
             driver: DriverKind::DuckDb,
@@ -936,6 +1036,7 @@ mod tests {
     #[tokio::test]
     async fn redis_ping_fails_gracefully_without_server() {
         let conn = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "redis-test".into(),
             name: "Redis Test".into(),
             driver: DriverKind::Redis,
@@ -957,6 +1058,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_host_fails_for_remote_drivers() {
         let mut conn = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "test".into(),
             name: "Test".into(),
             driver: DriverKind::Postgres,
@@ -982,6 +1084,7 @@ mod tests {
     #[tokio::test]
     async fn test_unreachable_host_returns_proper_error() {
         let conn = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "test".into(),
             name: "Test".into(),
             driver: DriverKind::Postgres,

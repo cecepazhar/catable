@@ -112,6 +112,7 @@ fn parse_db_url(raw: &str, driver: DriverKind) -> Result<ConnectionConfig, Strin
     let decode = |s: &str| percent_decode_str(s).decode_utf8_lossy().into_owned();
 
     Ok(ConnectionConfig {
+        connect_timeout_secs: None,
         id: format!("it-{driver:?}").to_lowercase(),
         name: format!("IT {driver:?}"),
         driver,

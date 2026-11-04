@@ -154,3 +154,92 @@ pub enum CatableError {
     #[error("Tunnel error: {0}")]
     Tunnel(String),
 }
+
+
+/// Coarse category of a failed connection attempt, so the UI can show a
+/// specific hint instead of a raw driver string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectErrorKind {
+    Refused,
+    Timeout,
+    AuthFailed,
+    TlsFailed,
+    TunnelFailed,
+    DnsFailed,
+    Other,
+}
+
+impl ConnectErrorKind {
+    /// Classifies a driver/tunnel error message. Order matters: the tunnel
+    /// prefix wins, then the most specific network/auth causes.
+    pub fn classify(message: &str) -> Self {
+        let m = message.to_lowercase();
+        let has = |needles: &[&str]| needles.iter().any(|n| m.contains(n));
+        if has(&["ssh tunnel", "tunnel:", "ssh host", "ssh agent", "ssh handshake"]) {
+            Self::TunnelFailed
+        } else if has(&["timed out", "timeout", "os error 110", "os error 10060"]) {
+            Self::Timeout
+        } else if has(&["connection refused", "os error 111", "os error 10061", "actively refused"]) {
+            Self::Refused
+        } else if has(&[
+            "failed to lookup",
+            "name or service not known",
+            "no such host",
+            "nodename nor servname",
+            "failed to resolve",
+            "dns error",
+        ]) {
+            Self::DnsFailed
+        } else if has(&[
+            "access denied",
+            "password authentication failed",
+            "authentication failed",
+            "28p01",
+            "28000",
+            "error 1045",
+            "auth plugin",
+        ]) {
+            Self::AuthFailed
+        } else if has(&["tls", "ssl", "certificate"]) {
+            Self::TlsFailed
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Short actionable hint (English; the UI localizes by `kind`).
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Refused => "Nothing is listening on that host/port. Check the port and that the server is running.",
+            Self::Timeout => "No response in time. Check firewall/port, VPN, or whether an SSH tunnel is required.",
+            Self::AuthFailed => "The server rejected the credentials. Check user, password and database.",
+            Self::TlsFailed => "TLS/SSL negotiation failed. Check the server's SSL settings.",
+            Self::TunnelFailed => "The SSH tunnel could not be established. Test the SSH settings first.",
+            Self::DnsFailed => "The host name could not be resolved. Check the host spelling and DNS.",
+            Self::Other => "Connection failed. See the message for details.",
+        }
+    }
+}
+
+#[cfg(test)]
+mod connect_error_kind_tests {
+    use super::ConnectErrorKind as K;
+
+    #[test]
+    fn classifies_common_messages() {
+        assert_eq!(K::classify("mysql connection timed out after 10s"), K::Timeout);
+        assert_eq!(K::classify("error connecting: Connection refused (os error 111)"), K::Refused);
+        assert_eq!(K::classify("db error: FATAL: password authentication failed for user \"x\""), K::AuthFailed);
+        assert_eq!(K::classify("Access denied for user 'root'@'h' (using password: YES)"), K::AuthFailed);
+        assert_eq!(K::classify("failed to lookup address information: Name or service not known"), K::DnsFailed);
+        assert_eq!(K::classify("SSH Tunnel connection failed: x"), K::TunnelFailed);
+        assert_eq!(K::classify("TLS handshake failed"), K::TlsFailed);
+        assert_eq!(K::classify("something odd"), K::Other);
+    }
+
+    #[test]
+    fn tunnel_prefix_beats_timeout() {
+        assert_eq!(K::classify("SSH Tunnel connection failed: timed out"), K::TunnelFailed);
+    }
+}

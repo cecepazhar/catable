@@ -28,6 +28,8 @@ pub struct AppState {
     pub is_pro: Mutex<bool>,
     pub sync_connected: Mutex<bool>,
     pub last_sync_at: Mutex<Option<u64>>,
+    /// Open database sessions (tunnel + connection pool per connection).
+    pub sessions: catable_core::SessionManager,
 }
 
 impl AppState {
@@ -39,6 +41,7 @@ impl AppState {
             is_pro: Mutex::new(true),
             sync_connected: Mutex::new(true),
             last_sync_at: Mutex::new(Some(chrono::Utc::now().timestamp() as u64)),
+            sessions: catable_core::SessionManager::new(),
         }
     }
 }
@@ -181,6 +184,7 @@ pub fn evaluate_query_safety(
         conn = current_guard.clone();
     }
     let conn = conn.unwrap_or(ConnectionConfig {
+        connect_timeout_secs: None,
         id: "default".into(),
         name: "Sandbox".into(),
         driver: DriverKind::Sqlite,
@@ -198,26 +202,146 @@ pub fn evaluate_query_safety(
     Ok(GuardrailEngine::evaluate(&sql, &conn))
 }
 
+// DB/network commands are `async` so Tauri runs them on the async runtime
+// instead of the main thread; blocking work (ssh2, SQLite) is moved onto the
+// blocking pool inside the core.
 #[tauri::command]
-pub fn test_ssh_tunnel(config: catable_core::SshTunnelConfig) -> Result<bool, String> {
-    catable_core::test_ssh_tunnel(&config)
-        .map(|_| true)
+pub async fn test_ssh_tunnel(
+    config: catable_core::SshTunnelConfig,
+) -> Result<catable_core::SshTestResult, String> {
+    tokio::task::spawn_blocking(move || catable_core::test_ssh_tunnel_report(&config))
+        .await
+        .map_err(|e| format!("SSH test task failed: {e}"))
+}
+
+#[tauri::command]
+pub async fn test_database_connection(
+    config: ConnectionConfig,
+) -> Result<ConnectionTestResult, String> {
+    Ok(QueryExecutor::test_connection_async(&config).await)
+}
+
+// ---- Sessions -------------------------------------------------------------
+// The frontend opens a session by saved-connection id; the decrypted config
+// (password, SSH secrets) stays in Rust. Every later call carries only the
+// opaque session id.
+
+fn resolve_connection(state: &AppState, id: &str) -> Result<ConnectionConfig, String> {
+    if id == catable_core::SANDBOX_CONNECTION_ID {
+        return Ok(ConnectionConfig::sandbox());
+    }
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault
+        .list_connections()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("Connection '{id}' was not found in the vault."))
+}
+
+#[tauri::command]
+pub async fn session_open(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> Result<catable_core::SessionInfo, String> {
+    let cfg = resolve_connection(&state, &connection_id)?;
+    state.sessions.open(cfg).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn session_close(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<bool, String> {
+    Ok(state.sessions.close(&session_id).await)
+}
+
+#[tauri::command]
+pub async fn session_execute(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    sql: String,
+) -> Result<QueryResult, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    Ok(session.execute(&sql).await)
+}
+
+#[tauri::command]
+pub async fn session_list_tables(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<TableInfo>, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    session.list_tables().await.map_err(|e| e.to_string())
+}
+
+/// One page of a table with server-side filter / sort / paging (+ exact total).
+#[tauri::command]
+pub async fn session_browse(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    request: catable_core::BrowseRequest,
+) -> Result<catable_core::BrowseResult, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    session.browse(&request).await.map_err(|e| e.to_string())
+}
+
+/// The SELECT the browse request would run, without running it.
+#[tauri::command]
+pub async fn session_build_select(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    request: catable_core::BrowseRequest,
+) -> Result<String, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    session.build_select_sql(&request).map_err(|e| e.to_string())
+}
+
+/// Columns, keys, foreign keys, indexes and DDL of a table.
+#[tauri::command]
+pub async fn session_describe_table(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    table: String,
+    schema: Option<String>,
+) -> Result<catable_core::TableStructure, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    session
+        .describe_structure(&table, schema.as_deref())
+        .await
         .map_err(|e| e.to_string())
 }
 
+/// The SQL a staged change set will run (shown in the commit preview). Touches nothing.
 #[tauri::command]
-pub fn test_database_connection(config: ConnectionConfig) -> Result<ConnectionTestResult, String> {
-    Ok(QueryExecutor::test_connection(&config))
+pub async fn session_preview_changes(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    changes: catable_core::RowChangeSet,
+) -> Result<Vec<String>, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    session.preview_changes(&changes).map_err(|e| e.to_string())
 }
 
+/// Applies a staged change set in one transaction; any failure rolls everything back.
 #[tauri::command]
-pub fn list_database_tables(config: ConnectionConfig) -> Result<Vec<TableInfo>, String> {
-    QueryExecutor::list_tables(&config).map_err(|e| e.to_string())
+pub async fn session_apply_changes(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    changes: catable_core::RowChangeSet,
+) -> Result<catable_core::ApplyResult, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    session.apply_changes(&changes).await.map_err(|e| e.to_string())
 }
 
+/// Round-trip time (ms) of a trivial query on the session.
 #[tauri::command]
-pub fn execute_database_query(config: ConnectionConfig, sql: String) -> Result<QueryResult, String> {
-    Ok(QueryExecutor::execute_query(&config, &sql))
+pub async fn session_ping(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<u64, String> {
+    let session = state.sessions.get(&session_id).await.map_err(|e| e.to_string())?;
+    session.ping().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -584,6 +708,7 @@ pub fn evaluate_query_blast_radius(
         conn = current.clone();
     }
     let conn = conn.unwrap_or(ConnectionConfig {
+        connect_timeout_secs: None,
         id: "default".into(),
         name: "Sandbox".into(),
         driver: DriverKind::Sqlite,
@@ -599,121 +724,50 @@ pub fn evaluate_query_blast_radius(
         workspace_id: None,
     });
 
-    let upper = sql.to_uppercase();
-    let trimmed = upper.trim();
-    let tables_affected = extract_tables(trimmed);
-    let is_read = trimmed.starts_with("SELECT")
-        || trimmed.starts_with("EXPLAIN")
-        || trimmed.starts_with("SHOW")
-        || trimmed.starts_with("DESCRIBE")
-        || trimmed.starts_with("PRAGMA")
-        || trimmed.starts_with("WITH");
+    // One source of truth: the parser-based guardrail decides the risk, so this dry-run cannot
+    // disagree with (or be weaker than) what the executor actually enforces.
+    let verdict = GuardrailEngine::evaluate(&sql, &conn);
+    let tables_affected = extract_tables(sql.to_uppercase().trim());
+    let reason = verdict.reason.clone().unwrap_or_default();
+    let unbounded = reason.to_lowercase().contains("unbounded");
 
-    let unbounded_delete = trimmed.starts_with("DELETE FROM") && !trimmed.contains("WHERE");
-    let unbounded_update = trimmed.starts_with("UPDATE") && !trimmed.contains("WHERE");
-
-    // 1. Read-only gate
-    if conn.read_only && !is_read {
-        return BlastRadiusResult {
+    match verdict.risk {
+        QueryRisk::Blocked => BlastRadiusResult {
             risk: QueryRisk::Blocked,
-            tables_affected: tables_affected.clone(),
-            estimated_rows: 0,
+            tables_affected,
+            estimated_rows: if unbounded { u64::MAX } else { 0 },
             is_destructive: true,
             requires_confirmation: false,
             shield_action: "Blocked".into(),
-            explanation: "Connection is read-only; write queries are disallowed.".into(),
-        };
-    }
-
-    // 2. Destructive DDL (DROP / TRUNCATE)
-    let destructive_ddl = trimmed.starts_with("DROP TABLE")
-        || trimmed.starts_with("DROP DATABASE")
-        || trimmed.starts_with("TRUNCATE");
-    if destructive_ddl {
-        if conn.is_production() {
-            return BlastRadiusResult {
-                risk: QueryRisk::Blocked,
-                tables_affected: tables_affected.clone(),
-                estimated_rows: u64::MAX,
-                is_destructive: true,
-                requires_confirmation: false,
-                shield_action: "Blocked".into(),
-                explanation: "Destructive DDL (DROP/TRUNCATE) is strictly blocked on Production connections.".into(),
-            };
-        }
-        return BlastRadiusResult {
+            explanation: reason,
+        },
+        QueryRisk::Destructive => BlastRadiusResult {
             risk: QueryRisk::Destructive,
-            tables_affected: tables_affected.clone(),
+            tables_affected,
             estimated_rows: u64::MAX,
             is_destructive: true,
             requires_confirmation: true,
             shield_action: "Warn".into(),
-            explanation: "Destructive DDL: will permanently delete tables or data.".into(),
-        };
-    }
-
-    // 3. Unbounded DELETE / UPDATE
-    if unbounded_delete || unbounded_update {
-        if conn.is_production() {
-            return BlastRadiusResult {
-                risk: QueryRisk::Blocked,
-                tables_affected: tables_affected.clone(),
-                estimated_rows: u64::MAX,
-                is_destructive: true,
-                requires_confirmation: false,
-                shield_action: "Blocked".into(),
-                explanation: "Unbounded DELETE/UPDATE without a WHERE clause is blocked on Production connections.".into(),
-            };
-        }
-        return BlastRadiusResult {
-            risk: QueryRisk::Destructive,
-            tables_affected: tables_affected.clone(),
-            estimated_rows: u64::MAX,
-            is_destructive: true,
-            requires_confirmation: true,
-            shield_action: "Warn".into(),
-            explanation: "Unbounded DELETE/UPDATE affects all rows in the target table.".into(),
-        };
-    }
-
-    // 4. Targeted mutations — Warning on Production
-    let targeted_mutation = trimmed.starts_with("DELETE FROM") || trimmed.starts_with("UPDATE");
-    if targeted_mutation && conn.is_production() {
-        return BlastRadiusResult {
+            explanation: reason,
+        },
+        QueryRisk::Warning => BlastRadiusResult {
             risk: QueryRisk::Warning,
-            tables_affected: tables_affected.clone(),
+            tables_affected,
             estimated_rows: 0,
             is_destructive: false,
             requires_confirmation: true,
             shield_action: "Warn".into(),
-            explanation: "Data modification: verify WHERE clause conditions before executing on production.".into(),
-        };
-    }
-
-    // 5. Schema alterations
-    let schema_alter = trimmed.starts_with("ALTER TABLE")
-        || trimmed.starts_with("DROP INDEX")
-        || trimmed.starts_with("DROP VIEW");
-    if schema_alter {
-        return BlastRadiusResult {
-            risk: QueryRisk::Warning,
-            tables_affected: tables_affected.clone(),
+            explanation: reason,
+        },
+        QueryRisk::Safe => BlastRadiusResult {
+            risk: QueryRisk::Safe,
+            tables_affected,
             estimated_rows: 0,
             is_destructive: false,
-            requires_confirmation: true,
-            shield_action: "Warn".into(),
-            explanation: "Schema modification: verify target object definition before applying.".into(),
-        };
-    }
-
-    BlastRadiusResult {
-        risk: QueryRisk::Safe,
-        tables_affected,
-        estimated_rows: 0,
-        is_destructive: false,
-        requires_confirmation: false,
-        shield_action: "Allow".into(),
-        explanation: "Read-only query; no blast radius detected.".into(),
+            requires_confirmation: false,
+            shield_action: "Allow".into(),
+            explanation: "Read-only query; no blast radius detected.".into(),
+        },
     }
 }
 

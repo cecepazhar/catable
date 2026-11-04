@@ -28,6 +28,7 @@
   import { dbStore, type ConnectionConfig } from '$lib/stores/database.svelte';
   import DatabaseIcon from '$lib/components/DatabaseIcon.svelte';
   import { goto } from '$app/navigation';
+  import { errorText } from '$lib/errors';
 
   let isCollapsed = $state(false);
   let mobileDrawerOpen = $state(false);
@@ -117,9 +118,13 @@
   }
 
   async function connectToDb(c: ConnectionConfig) {
-    await dbStore.connect(c);
-    showToast(`Connected to "${c.name}"`, 'success');
-    void goto('/table-browser');
+    try {
+      await dbStore.connect(c);
+      showToast(`Connected to "${c.name}"`, 'success');
+      void goto('/table-browser');
+    } catch (e) {
+      showToast(`Could not connect to "${c.name}": ${errorText(e)}`, 'error');
+    }
   }
 
   function handleDisconnect() {

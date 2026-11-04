@@ -140,6 +140,11 @@ impl Vault {
                 .map_err(|e| CatableError::Vault(e.to_string()))?;
         }
 
+        if !column_exists("connect_timeout_secs")? {
+            conn.execute_batch("ALTER TABLE connections ADD COLUMN connect_timeout_secs INTEGER")
+                .map_err(|e| CatableError::Vault(e.to_string()))?;
+        }
+
         if !column_exists("ssh_tunnel")? {
             conn.execute_batch("ALTER TABLE connections ADD COLUMN ssh_tunnel TEXT")
                 .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -200,8 +205,8 @@ impl Vault {
 
         conn.execute(
             r#"
-            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name, workspace_id)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            INSERT INTO connections (id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name, workspace_id, connect_timeout_secs)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 driver = excluded.driver,
@@ -214,7 +219,8 @@ impl Vault {
                 encrypted_password = COALESCE(excluded.encrypted_password, connections.encrypted_password),
                 ssh_tunnel = excluded.ssh_tunnel,
                 group_name = excluded.group_name,
-                workspace_id = excluded.workspace_id;
+                workspace_id = excluded.workspace_id,
+                connect_timeout_secs = excluded.connect_timeout_secs;
             "#,
             params![
                 cfg.id,
@@ -229,7 +235,8 @@ impl Vault {
                 encrypted_password_param,
                 encrypted_ssh_tunnel_param,
                 cfg.group_name.as_deref(),
-                cfg.workspace_id.as_deref().unwrap_or("default")
+                cfg.workspace_id.as_deref().unwrap_or("default"),
+                cfg.connect_timeout_secs.map(|v| v as i64)
             ],
         )
         .map_err(|e| CatableError::Vault(e.to_string()))?;
@@ -243,7 +250,7 @@ impl Vault {
             .lock()
             .map_err(|e| CatableError::Vault(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name, workspace_id FROM connections ORDER BY name ASC")
+            .prepare("SELECT id, name, driver, environment, host, port, database, user, read_only, encrypted_password, ssh_tunnel, group_name, workspace_id, connect_timeout_secs FROM connections ORDER BY name ASC")
             .map_err(|e| CatableError::Vault(e.to_string()))?;
 
         let rows = stmt
@@ -255,6 +262,11 @@ impl Vault {
                 let enc_ssh: Option<String> = r.get(10)?;
                 let group_name: Option<String> = r.get(11)?;
                 let workspace_id: Option<String> = r.get(12).unwrap_or(Some("default".to_string()));
+                let connect_timeout_secs: Option<u64> = r
+                    .get::<_, Option<i64>>(13)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.max(0) as u64);
 
                 let driver: DriverKind = serde_json::from_str(&format!("\"{}\"", driver_s))
                     .unwrap_or(DriverKind::Sqlite);
@@ -299,6 +311,7 @@ impl Vault {
                 };
 
                 Ok(ConnectionConfig {
+                    connect_timeout_secs,
                     id: r.get(0)?,
                     name: r.get(1)?,
                     driver,
@@ -988,6 +1001,7 @@ mod tests {
 
         let vault = Vault::open().unwrap();
         let cfg = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "conn-enc".into(),
             name: "Encrypted Pg".into(),
             driver: DriverKind::Postgres,
@@ -1018,6 +1032,7 @@ mod tests {
 
         let vault = Vault::open().unwrap();
         let cfg = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "conn-1".into(),
             name: "Local Postgres".into(),
             driver: DriverKind::Postgres,
@@ -1099,6 +1114,7 @@ mod tests {
 
         // 2. Create connection in workspace
         let cfg = ConnectionConfig {
+            connect_timeout_secs: None,
             id: "db-1".into(),
             name: "Main DB".into(),
             driver: DriverKind::Postgres,

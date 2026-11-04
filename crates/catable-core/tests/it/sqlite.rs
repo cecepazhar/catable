@@ -19,6 +19,7 @@ pub fn seeded_database() -> Target<ConnectionConfig> {
         .unwrap_or_else(|e| panic!("seeding {} failed: {e}", seed.display()));
 
     Ok(ConnectionConfig {
+        connect_timeout_secs: None,
         id: "it-sqlite".into(),
         name: "IT Sqlite".into(),
         driver: DriverKind::Sqlite,
