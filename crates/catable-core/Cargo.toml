@@ -52,6 +52,11 @@ zeroize = { version = "1", features = ["derive"] }
 aes-gcm = "0.10"
 ssh2 = "0.9.6"
 dirs = "7.0.0"
+# DB service engine provisioning (Phase 2)
 anyhow = "1.0.104"
+flate2 = "1"
+tar = "0.4"
+zip = "0.6"
+libc = "0.2"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 machine-uid = "0.5"

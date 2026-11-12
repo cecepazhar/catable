@@ -14,6 +14,7 @@ mod error;
 mod executor;
 mod guard;
 mod paths;
+pub mod service;
 pub mod mutation;
 pub mod schema;
 pub mod session;
