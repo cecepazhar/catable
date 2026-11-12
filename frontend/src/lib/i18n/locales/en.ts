@@ -62,6 +62,7 @@ const en = {
     table_browser: 'Table Browser',
     schema_erd: 'Schema ERD',
     ai_copilot: 'AI Copilot',
+    services: 'Services',
     settings: 'Settings',
     contribution: 'Support & Contribution',
     dashboard: 'Dashboard',

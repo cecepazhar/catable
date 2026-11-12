@@ -840,3 +840,74 @@ pub async fn ai_explain(
     .map_err(|e| e.to_string())?
 }
 
+
+// ===================== DB Service Engine Manager (CAT-SVC) =====================
+use catable_core::service::{create_service, EngineType, DbService};
+use catable_core::service::{get as svc_api_get, list as svc_api_list, remove as svc_api_remove, stop as svc_api_stop};
+use catable_core::Environment;
+
+#[tauri::command]
+pub fn svc_list() -> Result<Vec<DbService>, String> {
+    Ok(svc_api_list().map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub fn svc_get(service_id: String) -> Result<DbService, String> {
+    Ok(svc_api_get(&service_id).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub fn svc_create(
+    engine: String,
+    version: String,
+    name: String,
+    preferred_port: Option<u16>,
+) -> Result<DbService, String> {
+    let eng = match engine.as_str() {
+        "postgres" | "postgresql" => EngineType::Postgres,
+        "mysql" => EngineType::Mysql,
+        "mariadb" => EngineType::Mariadb,
+        _ => return Err(format!("unknown engine: {}", engine)),
+    };
+    let port = preferred_port.unwrap_or_else(|| match eng {
+        EngineType::Postgres => 5432,
+        _ => 3306,
+    });
+    Ok(create_service(eng, &version, &name, port).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub fn svc_stop(service_id: String) -> Result<(), String> {
+    svc_api_stop(&service_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn svc_remove(service_id: String) -> Result<(), String> {
+    Ok(svc_api_remove(&service_id).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub fn svc_open_in_studio(service_id: String) -> Result<ConnectionConfig, String> {
+    let svc = svc_api_get(&service_id).map_err(|e| e.to_string())?;
+    let (driver, port) = match svc.engine {
+        EngineType::Postgres => (DriverKind::Postgres, svc.port),
+        EngineType::Mysql | EngineType::Mariadb => (DriverKind::Mysql, svc.port),
+    };
+    Ok(ConnectionConfig {
+        id: format!("svc-{}", svc.id),
+        name: svc.name.clone(),
+        driver,
+        environment: Environment::Development,
+        host: "127.0.0.1".into(),
+        port,
+        database: "catable".into(),
+        user: "catable".into(),
+        password: Some("catable_pass".into()),
+        read_only: false,
+        ssh_tunnel: None,
+        group_name: None,
+        workspace_id: None,
+        connect_timeout_secs: None,
+    })
+}

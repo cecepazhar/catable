@@ -70,14 +70,18 @@ pub fn download_service(
     let archive_name = format!("engine-{}-{}.{}", v.engine, v.version, v.engine_archive_name());
     let archive_path = bin_dir.join(&archive_name);
 
-    // 1) Download via ureq (blocking, in-worker thread)
-    let response = ureq::get(&v.url)
-        .timeout(std::time::Duration::from_secs(300))
+    // 1) Download via ureq v3 Agent — read whole body into bytes
+    let agent = ureq::Agent::new_with_defaults();
+    let response = agent
+        .get(&v.url)
         .call()
         .map_err(|e| CatableError::Io(format!("download {} failed: {}", v.url, e)))?;
-    let mut bytes = Vec::new();
-    response.body_mut().read_to_end(&mut bytes)
-        .map_err(|e| CatableError::Io(format!("read body: {}", e)))?;
+    let mut bytes: Vec<u8> = Vec::new();
+    response
+        .into_body()
+        .as_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| CatableError::Io(format!("read body {}: {}", v.url, e)))?;
 
     // 2) SHA-256 verify
     use sha2::{Digest, Sha256};
@@ -140,36 +144,34 @@ fn extract(archive: &Path, dest: &Path, v: &ServiceVersion) -> Result<(), Catabl
                 entry.read_to_end(&mut buf).ok();
                 std::fs::write(&out_path, buf).map_err(|e| CatableError::Io(e.to_string()))?;
                 #[cfg(unix)]
-                std::os::unix::fs::PermissionsExt::set_permissions(
-                    &out_path,
-                    std::fs::Permissions::from_mode(0o755),
-                )
-                .ok();
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perms = std::fs::Permissions::from_mode(0o755);
+                    std::fs::set_permissions(&out_path, perms).ok();
+                }
             }
         }
     } else {
         let gz = flate2::read::GzDecoder::new(file);
-        let tar = tar::Archive::new(gz);
+        let mut tar = tar::Archive::new(gz);
         let mut entries = tar
-            .into_entries()
+            .entries()
             .map_err(|e| CatableError::Io(e.to_string()))?;
-        while let Some(mut entry) = entries
-            .next()
-            .ok_or_else(|| CatableError::Io("tar iteration failed".into()))?
-        {
+        while let Some(result) = entries.next() {
+            let mut entry = result.map_err(|e| CatableError::Io(format!("tar read entry: {}", e)))?;
             let name = entry.path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             if name.is_empty() || name.starts_with("..") {
                 continue;
             }
             let out_path = dest.join(&name);
             if entry.header().entry_type().is_dir() {
-                std::fs::create_dir_all(out_path).ok();
+                std::fs::create_dir_all(&out_path).ok();
             } else {
                 if let Some(parent) = out_path.parent() {
                     std::fs::create_dir_all(parent).ok();
                 }
                 entry
-                    .unpack(out_path)
+                    .unpack(&out_path)
                     .map_err(|e| CatableError::Io(format!("tar unpack: {}", e)))?;
                 #[cfg(unix)]
                 {
@@ -244,7 +246,7 @@ trait EngineArchive {
 impl EngineArchive for ServiceVersion {
     fn engine_archive_name(&self) -> String {
         format!(
-            "{}-{}-{}",
+            "engine-{}-{}-{}",
             self.engine,
             self.version,
             TargetOs::current()

@@ -55,5 +55,13 @@ export const GENERATED_NAV_ITEMS: GeneratedNavItem[] = [
     icon: "sparkles",
     description: "Schema-aware DBA copilot, NL-to-SQL & query optimizer",
     path: "M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
+  },
+  {
+    key: "services",
+    label: "Services",
+    href: "/services",
+    icon: "server",
+    description: "Local DB engine manager (PostgreSQL / MySQL / MariaDB)",
+    path: "M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"
   }
 ];

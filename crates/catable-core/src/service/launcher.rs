@@ -108,7 +108,7 @@ pub fn launch_service(
         });
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| CatableError::Io(format!("spawn {}: {}", cmd_path, e)))?;
 

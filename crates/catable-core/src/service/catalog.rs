@@ -130,7 +130,7 @@ impl ServiceCatalog {
             version: version.to_string(),
             name: name.to_string(),
             port,
-            data_dir,
+            data_dir: data_dir.clone(),
             bin_dir: bin_dir.clone(),
             state: ServiceState::Stopped,
             created_at: chrono::Utc::now().timestamp(),

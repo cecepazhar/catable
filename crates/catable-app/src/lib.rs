@@ -90,7 +90,14 @@ pub fn run() {
             commands::evaluate_query_blast_radius,
             // AI DBA Copilot
             commands::ai_chat,
-            commands::ai_explain
+            commands::ai_explain,
+            // DB Service Engine Manager (CAT-SVC)
+            commands::svc_list,
+            commands::svc_get,
+            commands::svc_create,
+            commands::svc_stop,
+            commands::svc_remove,
+            commands::svc_open_in_studio
         ]);
 
     builder
