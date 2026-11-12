@@ -63,6 +63,7 @@ const id: Dictionary = {
     table_browser: 'Peramban Tabel',
     schema_erd: 'Skema ERD',
     ai_copilot: 'AI Copilot',
+    services: 'Layanan',
     settings: 'Pengaturan',
     contribution: 'Dukungan & Kontribusi',
     dashboard: 'Dasbor',
