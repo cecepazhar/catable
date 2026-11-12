@@ -844,6 +844,7 @@ pub async fn ai_explain(
 // ===================== DB Service Engine Manager (CAT-SVC) =====================
 use catable_core::service::{create_service, EngineType, DbService};
 use catable_core::service::{get as svc_api_get, list as svc_api_list, remove as svc_api_remove, stop as svc_api_stop};
+use catable_core::service::{probe_detail, ProbeResult};
 use catable_core::Environment;
 
 #[tauri::command]
@@ -910,4 +911,28 @@ pub fn svc_open_in_studio(service_id: String) -> Result<ConnectionConfig, String
         workspace_id: None,
         connect_timeout_secs: None,
     })
+}
+
+#[tauri::command]
+pub fn svc_available_versions(engine: String) -> Result<Vec<String>, String> {
+    let eng = match engine.as_str() {
+        "postgres" | "postgresql" => EngineType::Postgres,
+        "mysql" => EngineType::Mysql,
+        "mariadb" => EngineType::Mariadb,
+        _ => return Err(format!("unknown engine: {}", engine)),
+    };
+    Ok(eng.versions().to_vec())
+}
+
+#[tauri::command]
+pub fn svc_probe(service_id: String) -> Result<ProbeResult, String> {
+    let svc = svc_api_get(&service_id).map_err(|e| e.to_string())?;
+    Ok(probe_detail(&svc, std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub fn svc_test_connection(service_id: String) -> Result<bool, String> {
+    let svc = svc_api_get(&service_id).map_err(|e| e.to_string())?;
+    let probe = probe_detail(&svc, std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    Ok(probe.reachable)
 }

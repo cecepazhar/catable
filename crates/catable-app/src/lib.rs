@@ -97,7 +97,10 @@ pub fn run() {
             commands::svc_create,
             commands::svc_stop,
             commands::svc_remove,
-            commands::svc_open_in_studio
+            commands::svc_open_in_studio,
+            commands::svc_available_versions,
+            commands::svc_probe,
+            commands::svc_test_connection
         ]);
 
     builder

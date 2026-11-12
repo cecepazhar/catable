@@ -14,10 +14,10 @@ mod monitor;
 mod port;
 mod service;
 
-pub use catalog::{DbService, EngineType, ServiceCatalog, ServiceState};
+pub use catalog::{AVAILABLE_VERSIONS, DbService, EngineType, ServiceCatalog, ServiceState};
 #[cfg(not(windows))]
 pub use download::{download_service, ServiceProvisionResult, ServiceVersion, TargetOs};
 pub use launcher::{launch_service, LaunchResult, StopResult};
-pub use monitor::probe_service;
+pub use monitor::{probe_detail, probe_service, ProbeResult, ProbeState};
 pub use port::find_free_port;
 pub use service::{create_and_start, create_service, get, list, remove, stop};

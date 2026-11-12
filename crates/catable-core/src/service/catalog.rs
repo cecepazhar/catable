@@ -23,6 +23,33 @@ impl std::fmt::Display for EngineType {
     }
 }
 
+/// Available engine versions per engine, in descending order (newest first).
+/// Used by the UI "New Service" form and by the auto-downloader to build
+/// the correct binary URL.
+pub const AVAILABLE_VERSIONS: &[(EngineType, &[&str])] = &[
+    (EngineType::Postgres, &["17.5", "16.9", "15.10"]),
+    (EngineType::Mysql, &["8.4", "8.0", "5.7"]),
+    (EngineType::Mariadb, &["11.8", "11.2", "10.11"]),
+];
+
+impl EngineType {
+    pub fn versions(&self) -> &'static [&'static str] {
+        for (engine, versions) in AVAILABLE_VERSIONS {
+            if *engine == *self {
+                return versions;
+            }
+        }
+        &[]
+    }
+
+    pub fn default_port(&self) -> u16 {
+        match self {
+            EngineType::Postgres => 5432,
+            EngineType::Mysql | EngineType::Mariadb => 3306,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceState {

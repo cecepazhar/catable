@@ -20,17 +20,23 @@
   let services = $state<DbService[]>([]);
   let isLoading = $state(false);
   let isModalOpen = $state(false);
+  let probing = $state<Record<string, boolean>>({});
 
   let formEngine = $state<'postgres' | 'mysql' | 'mariadb'>('postgres');
   let formVersion = $state('16');
   let formName = $state('');
   let formPort = $state(5432);
   let formStartAuto = $state(true);
+  let availableVersions = $state<Record<string, string[]>>({
+    postgres: [],
+    mysql: [],
+    mariadb: [],
+  });
 
   const ENGINE_VERSIONS: Record<string, string[]> = {
-    postgres: ['15', '16', '17'],
-    mysql: ['5.7', '8.0', '8.4'],
-    mariadb: ['10.11', '11.2', '11.8'],
+    postgres: ['17.5', '16.9', '15.10'],
+    mysql: ['8.4', '8.0', '5.7'],
+    mariadb: ['11.8', '11.2', '10.11'],
   };
 
   function engineLabel(e: DbService['engine']): string {
@@ -82,11 +88,46 @@
     try {
       const list = await invoke<DbService[]>('svc_list');
       services = list || [];
+      // Load available versions for each engine
+      for (const eng of ['postgres', 'mysql', 'mariadb'] as const) {
+        try {
+          const versions = await invoke<string[]>('svc_available_versions', { engine: eng });
+          if (versions?.length) availableVersions[eng] = versions;
+        } catch {
+          // Fallback to static list
+        }
+      }
     } catch (e: any) {
       console.warn('Failed to load db services:', e);
       services = [];
     } finally {
       isLoading = false;
+    }
+  }
+
+  async function probeService(svc: DbService) {
+    probing[svc.id] = true;
+    try {
+      const result = await invoke<{
+        reachable: boolean;
+        state: string;
+        engine_version: string | null;
+      }>('svc_probe', { serviceId: svc.id });
+      // Update service state based on probe result
+      const svcIdx = services.findIndex((s) => s.id === svc.id);
+      if (svcIdx >= 0) {
+        if (result.reachable) {
+          services[svcIdx] = { ...services[svcIdx], state: 'running' };
+          showToast(`Service "${svc.name}" is reachable on port ${svc.port}`, 'success');
+        } else {
+          services[svcIdx] = { ...services[svcIdx], state: 'stopped' };
+          showToast(`Service "${svc.name}" not reachable (state: ${result.state})`, 'error');
+        }
+      }
+    } catch (e: any) {
+      showToast(e?.message || 'Probe failed', 'error');
+    } finally {
+      probing[svc.id] = false;
     }
   }
 
@@ -259,6 +300,23 @@
                   Stop
                 </button>
               {/if}
+              <button
+                type="button"
+                onclick={() => probeService(svc)}
+                disabled={!!probing[svc.id]}
+                class="px-2.5 py-1.5 text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                title="Test connection status"
+              >
+                {#if probing[svc.id]}
+                  <span class="inline-block w-3 h-3 border-2 border-neutral-400 border-t-emerald-500 rounded-full animate-spin"></span>
+                  Testing…
+                {:else}
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Test
+                {/if}
+              </button>
             </div>
             <button
               type="button"
@@ -316,7 +374,7 @@
             bind:value={formVersion}
             class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-neutral-900 dark:text-white text-xs"
           >
-            {#each ENGINE_VERSIONS[formEngine] as v}
+            {#each (availableVersions[formEngine]?.length ? availableVersions[formEngine] : ENGINE_VERSIONS[formEngine]) as v}
               <option value={v}>{v}</option>
             {/each}
           </select>
@@ -334,13 +392,28 @@
 
         <div>
           <label class="block font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 mb-1">Port</label>
-          <input
-            type="number"
-            bind:value={formPort}
-            min="1024"
-            max="65535"
-            class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-neutral-900 dark:text-white font-mono"
-          />
+          <div class="flex items-center gap-2">
+            <input
+              type="number"
+              bind:value={formPort}
+              min="1024"
+              max="65535"
+              class="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-neutral-900 dark:text-white font-mono"
+            />
+            <button
+              type="button"
+              onclick={() => {
+                const used = new Set(services.map((s) => s.port));
+                let p = formPort;
+                while (used.has(p) && p < 65535) p++;
+                formPort = p;
+              }}
+              class="px-2.5 py-2 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+              title="Find next free port"
+            >
+              Auto
+            </button>
+          </div>
         </div>
 
         <label class="flex items-center gap-2 cursor-pointer">
