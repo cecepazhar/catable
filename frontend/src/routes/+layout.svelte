@@ -311,7 +311,7 @@
         </div>
 
         <!-- Workspaces Navigation Item -->
-        <div class="px-2.5 pb-2">
+        <div class="px-2.5 pb-2 space-y-0.5">
           <a
             href="/groups"
             class="flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-colors {page.url.pathname === '/groups' ? 'bg-blue-600 text-white shadow-xs' : 'text-neutral-400 hover:text-white hover:bg-neutral-800/60'}"
@@ -325,6 +325,22 @@
             {#if !isCollapsed}
               <span class="text-[10px] font-mono opacity-80 bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-400">
                 Manage →
+              </span>
+            {/if}
+          </a>
+          <a
+            href="/services"
+            class="flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-colors {page.url.pathname === '/services' ? 'bg-emerald-600 text-white shadow-xs' : 'text-neutral-400 hover:text-emerald-400 hover:bg-neutral-800/60'}"
+          >
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 text-emerald-500 {page.url.pathname === '/services' ? 'text-white' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+              </svg>
+              {#if !isCollapsed}<span>Services</span>{/if}
+            </div>
+            {#if !isCollapsed}
+              <span class="text-[10px] font-mono opacity-80 bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-400">
+                + DB Engine
               </span>
             {/if}
           </a>
