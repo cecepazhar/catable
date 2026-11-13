@@ -210,10 +210,12 @@
             <span class="text-neutral-400 dark:text-neutral-600">/</span>
             <span class="font-mono text-neutral-700 dark:text-neutral-300">{dbStore.activeTable}</span>
           {/if}
+        {:else if page.url.pathname === '/services'}
+          <span class="font-medium text-emerald-600 dark:text-emerald-400">Services (v{APP_VERSION})</span>
         {:else if page.url.pathname === '/settings'}
           <span class="font-medium text-neutral-800 dark:text-neutral-200">Settings</span>
         {:else}
-          <span class="font-medium text-neutral-500 dark:text-neutral-400">Connection Manager (Antares Mode)</span>
+          <span class="font-medium text-neutral-500 dark:text-neutral-400">v{APP_VERSION}</span>
         {/if}
       </div>
     </div>
