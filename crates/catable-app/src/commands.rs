@@ -921,7 +921,7 @@ pub fn svc_available_versions(engine: String) -> Result<Vec<String>, String> {
         "mariadb" => EngineType::Mariadb,
         _ => return Err(format!("unknown engine: {}", engine)),
     };
-    Ok(eng.versions().to_vec())
+    Ok(eng.versions().iter().map(|v| v.to_string()).collect())
 }
 
 #[tauri::command]

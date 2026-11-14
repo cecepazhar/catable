@@ -43,11 +43,12 @@ pub fn probe_detail(svc: &DbService, timeout: Duration) -> Result<ProbeResult, C
         match TcpStream::connect(&addr) {
             Ok(mut stream) => {
                 stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
-                let version = match svc.engine {
+                let version: Option<String> = match svc.engine {
                     crate::service::EngineType::Postgres => {
                         let mut buf = [0u8; 12];
                         stream.read(&mut buf).ok();
-                        String::from_utf8_lossy(&buf).to_string()
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        if s.is_empty() { None } else { Some(s) }
                     }
                     _ => {
                         let mut buf = [0u8; 128];
@@ -62,7 +63,7 @@ pub fn probe_detail(svc: &DbService, timeout: Duration) -> Result<ProbeResult, C
                 return Ok(ProbeResult {
                     reachable: true,
                     state: ProbeState::Reachable,
-                    engine_version: if version.is_empty() { None } else { Some(version) },
+                    engine_version: version,
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
