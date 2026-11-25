@@ -20,6 +20,7 @@ type Script = {
   openFails?: string;
   executeFailsOnce?: string;
   browseFailsOnce?: string;
+  tables?: unknown[];
 };
 
 function backend(script: Script = {}) {
@@ -40,7 +41,7 @@ function backend(script: Script = {}) {
           open_ms: 1,
         };
       case 'session_list_tables':
-        return [{ name: 'users', table_type: 'table', columns: [], row_count: 5 }];
+        return script.tables ?? [{ name: 'users', table_type: 'table', columns: [], row_count: 5 }];
       case 'session_execute':
         if (executeFailures > 0) {
           executeFailures--;
@@ -82,6 +83,7 @@ function backend(script: Script = {}) {
 beforeEach(async () => {
   mockInvoke.mockReset();
   mockInvoke.mockResolvedValue(true);
+  for (const c of [...dbStore.openConnections]) dbStore.closeConnection(c.id);
   await dbStore.closeSession();
   dbStore.activeConnection = connA;
   dbStore.tables = [];
@@ -278,5 +280,58 @@ describe('DatabaseStore structure', () => {
     const [, args] = be.calls('session_describe_table')[0];
     expect(args).toEqual({ sessionId: 's1', table: 'orders', schema: null });
     expect(JSON.stringify(args)).not.toContain(SECRET);
+  });
+});
+
+describe('DatabaseStore multi-connection', () => {
+  it('keeps both sessions open and switches without reconnecting', async () => {
+    const be = backend();
+    await dbStore.connect(connA);
+    await dbStore.connect(connB);
+    expect(dbStore.openConnections.map((c) => c.id)).toEqual(['conn-a', 'conn-b']);
+    expect(be.calls('session_close')).toHaveLength(0);
+
+    await dbStore.switchConnection('conn-a');
+    expect(dbStore.activeConnection.id).toBe('conn-a');
+    await dbStore.executeQuery('SELECT 1');
+    const [, args] = be.calls('session_execute')[0];
+    expect((args as { sessionId: string }).sessionId).toBe('s1');
+    expect(be.opened()).toBe(2);
+    // The cached catalog is reused: no extra schema load on switch.
+    expect(be.calls('session_list_tables')).toHaveLength(2);
+  });
+
+  it('closing the active connection falls back to the other open one', async () => {
+    const be = backend();
+    await dbStore.connect(connA);
+    await dbStore.connect(connB);
+    dbStore.disconnect();
+    await Promise.resolve();
+    expect(dbStore.openConnections.map((c) => c.id)).toEqual(['conn-a']);
+    expect(dbStore.activeConnection.id).toBe('conn-a');
+    expect(dbStore.isConnected).toBe(true);
+    expect(be.calls('session_close').map((c) => (c[1] as { sessionId: string }).sessionId)).toEqual(['s2']);
+  });
+});
+
+describe('DatabaseStore schemas', () => {
+  const tables = [
+    { name: 'users', table_type: 'BASE TABLE', columns: [], row_count: 1, schema: 'public' },
+    { name: 'users', table_type: 'BASE TABLE', columns: [], row_count: 2, schema: 'sales' },
+    { name: 'orders', table_type: 'BASE TABLE', columns: [], row_count: 3, schema: 'sales' },
+  ];
+
+  it('lists one schema at a time (public first) and browses in the chosen one', async () => {
+    const be = backend({ tables });
+    await dbStore.connect(connA);
+    expect(dbStore.schemas).toEqual(['public', 'sales']);
+    expect(dbStore.activeSchema).toBe('public');
+    expect(dbStore.tables.map((t) => t.name)).toEqual(['users']);
+
+    dbStore.setSchema('sales');
+    expect(dbStore.tables.map((t) => t.name)).toEqual(['users', 'orders']);
+    await dbStore.browseTable({ table: 'orders' });
+    const [, args] = be.calls('session_browse')[0];
+    expect((args as { request: { schema: string } }).request.schema).toBe('sales');
   });
 });

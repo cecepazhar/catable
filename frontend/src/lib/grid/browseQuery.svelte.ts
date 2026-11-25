@@ -31,6 +31,8 @@ export interface FilterRow {
   op: FilterOp;
   value: string;
   value2: string;
+  /** Unchecked rows stay in the bar but are not sent. */
+  enabled: boolean;
 }
 
 export interface ColumnRef {
@@ -62,7 +64,24 @@ export class BrowseQuery {
   private nextId = 1;
 
   addFilter(column = '') {
-    this.filters = [...this.filters, { id: this.nextId++, column, op: 'eq', value: '', value2: '' }];
+    this.filters = [...this.filters, { id: this.nextId++, column, op: 'eq', value: '', value2: '', enabled: true }];
+  }
+
+  /** TablePlus "Apply" on one row: keep only that filter active. */
+  applyOnly(id: number) {
+    this.filters = this.filters.map((f) => ({ ...f, enabled: f.id === id }));
+  }
+
+  /** "Apply All": turn every row back on. */
+  enableAll() {
+    this.filters = this.filters.map((f) => ({ ...f, enabled: true }));
+  }
+
+  /** Inserts a new row right after fterId (TablePlus "+" button). */
+  insertAfter(afterId: number, column = '') {
+    const i = this.filters.findIndex((f) => f.id === afterId);
+    const row: FilterRow = { id: this.nextId++, column, op: 'eq', value: '', value2: '', enabled: true };
+    this.filters = [...this.filters.slice(0, i + 1), row, ...this.filters.slice(i + 1)];
   }
 
   removeFilter(id: number) {
@@ -101,7 +120,7 @@ export class BrowseQuery {
   private sendableFilters(): BrowseFilter[] {
     const out: BrowseFilter[] = [];
     for (const f of this.filters) {
-      if (!f.column) continue;
+      if (!f.column || f.enabled === false) continue;
       const { operands } = operatorInfo(f.op);
       if (operands === 0) {
         out.push({ column: f.column, op: f.op });

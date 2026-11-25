@@ -56,12 +56,14 @@ impl DriverRegistry {
     /// created on first use (sandbox.duckdb equivalent).
     pub fn resolve_duckdb_path(conn: &ConnectionConfig) -> Result<PathBuf, CatableError> {
         let dir = crate::paths::app_data_dir()?;
-        if conn.database.is_empty() || conn.database == ":memory:" {
+        let raw = crate::executor::clean_file_path(&conn.database);
+        if raw.is_empty() || raw == ":memory:" {
             Ok(dir.join("sandbox.duckdb"))
         } else {
-            let path = PathBuf::from(&conn.database);
-            if !path.exists() {
-                let in_app = dir.join(&conn.database);
+            let path = PathBuf::from(raw);
+            // A full path to a new file is fine: DuckDB creates it there.
+            if !path.exists() && path.is_relative() {
+                let in_app = dir.join(raw);
                 Ok(in_app)
             } else {
                 Ok(path)
@@ -153,6 +155,7 @@ impl DriverRegistry {
                 table_type: "table".into(),
                 columns: vec![],
                 row_count: 0,
+                schema: None,
             });
             entry.columns.push(TableColumnInfo {
                 name: column_name,

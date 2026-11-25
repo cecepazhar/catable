@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" class="dark" data-theme="catable">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>CATable</title>
     <script>
+      // Apply the saved theme before the first paint so the splash matches the app.
       try {
         const theme = localStorage.getItem('catable-theme');
         if (theme === 'light') {
@@ -15,9 +16,106 @@
         }
       } catch (e) {}
     </script>
+    <style>
+      /* Boot splash: plain HTML/CSS so it paints in the very first frame, before any JS bundle. */
+      html, body { margin: 0; background: #09090b; }
+      html:not(.dark), html:not(.dark) body { background: #f8fafc; }
+      #boot-splash {
+        position: fixed; inset: 0; z-index: 2147483647;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+        background:
+          radial-gradient(40% 45% at 30% 35%, rgba(59,130,246,.20), transparent 70%),
+          radial-gradient(35% 40% at 72% 65%, rgba(99,102,241,.17), transparent 70%),
+          #09090b;
+        color: #ededed;
+        font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+        transition: opacity 300ms ease, visibility 300ms ease;
+        user-select: none; cursor: default;
+      }
+      html:not(.dark) #boot-splash {
+        background:
+          radial-gradient(40% 45% at 30% 35%, rgba(59,130,246,.16), transparent 70%),
+          radial-gradient(35% 40% at 72% 65%, rgba(99,102,241,.12), transparent 70%),
+          #f8fafc;
+        color: #0f172a;
+      }
+      #boot-splash.is-done { opacity: 0; visibility: hidden; }
+      #boot-splash .bs-logo-wrap { position: relative; width: 84px; height: 84px; display: flex; align-items: center; justify-content: center; }
+      #boot-splash .bs-ring { position: absolute; inset: 0; border-radius: 26px; background: #3b82f6; animation: bs-breathe 3.2s ease-in-out infinite; }
+      #boot-splash .bs-logo { position: relative; width: 84px; height: 84px; border-radius: 22px; }
+      #boot-splash .bs-name { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; text-align: center; }
+      #boot-splash .bs-sub { margin-top: 2px; font-size: 12px; color: #71717a; text-align: center; }
+      #boot-splash .bs-track { width: 240px; height: 4px; border-radius: 4px; overflow: hidden; background: rgba(127,127,127,.18); }
+      #boot-splash .bs-bar { height: 100%; width: 0%; border-radius: 4px; background: linear-gradient(90deg, #3b82f6, #818cf8); transition: width 180ms ease-out; }
+      #boot-splash .bs-step { min-height: 16px; font-size: 11.5px; color: #71717a; }
+      #boot-splash .bs-by { position: absolute; bottom: 22px; font-size: 11px; color: #71717a; }
+      @keyframes bs-breathe { 0%, 100% { transform: scale(1); opacity: .35; } 50% { transform: scale(1.28); opacity: .05; } }
+      @media (prefers-reduced-motion: reduce) { #boot-splash .bs-ring { animation: none; opacity: .15; } }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
+    <div id="boot-splash" role="status" aria-live="polite" aria-label="Loading CATable">
+      <div class="bs-logo-wrap">
+        <span class="bs-ring" aria-hidden="true"></span>
+        <img class="bs-logo" src="%sveltekit.assets%/logo.png" alt="" />
+      </div>
+      <div>
+        <div class="bs-name">CATable</div>
+        <div class="bs-sub" id="boot-sub">Database studio &amp; local services</div>
+      </div>
+      <div class="bs-track"><div class="bs-bar" id="boot-bar"></div></div>
+      <div class="bs-step" id="boot-step">Starting…</div>
+      <div class="bs-by" id="boot-by">by Cecep Azhar · Fathforce</div>
+    </div>
+    <script>
+      // Progress creeps toward 90% on its own; the app reports real steps through
+      // __catableBoot.step() and finishes with __catableBoot.done(). Hard cap: 4 s.
+      (function () {
+        var bar = document.getElementById('boot-bar');
+        var label = document.getElementById('boot-step');
+        var splash = document.getElementById('boot-splash');
+        var id = false;
+        try {
+          var lang = localStorage.getItem('catable_locale') || (navigator.language || '').slice(0, 2);
+          if (lang === 'id') {
+            id = true;
+            document.getElementById('boot-sub').textContent = 'Studio database & layanan lokal';
+            document.getElementById('boot-by').textContent = 'oleh Cecep Azhar · Fathforce';
+            label.textContent = 'Memulai…';
+          }
+        } catch (e) {}
+        // Steps the app reports in English are shown in Indonesian when that is the language.
+        var ID_STEPS = {
+          'Opening vault…': 'Membuka vault…',
+          'Loading connections…': 'Memuat koneksi…',
+          'Starting local services…': 'Menyalakan layanan lokal…',
+          'Ready': 'Siap'
+        };
+        var pct = 0, finished = false;
+        function set(p) { pct = Math.max(pct, Math.min(100, p)); if (bar) bar.style.width = pct + '%'; }
+        var timer = setInterval(function () { if (pct < 90) set(pct + Math.max(0.6, (90 - pct) * 0.05)); }, 60);
+        function done() {
+          if (finished) return;
+          finished = true;
+          clearInterval(timer);
+          set(100);
+          setTimeout(function () {
+            if (splash) splash.classList.add('is-done');
+            setTimeout(function () { if (splash && splash.parentNode) splash.parentNode.removeChild(splash); }, 340);
+          }, 160);
+        }
+        window.__catableBoot = {
+          start: performance.now(),
+          step: function (text, p) {
+            if (label && text) label.textContent = (id && ID_STEPS[text]) || text;
+            if (typeof p === 'number') set(p);
+          },
+          done: done
+        };
+        setTimeout(done, 4000);
+      })();
+    </script>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>

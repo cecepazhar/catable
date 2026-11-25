@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ConnectErrorKind } from '$lib/connectErrors';
 import type { ChangeSet } from '$lib/grid/staging.svelte';
+import { workspace } from '$lib/stores/workspace.svelte';
 
 export type DriverKind = 'sqlite' | 'postgres' | 'mysql' | 'mariadb' | 'duckdb' | 'redis';
 export type Environment = 'development' | 'staging' | 'production';
@@ -63,6 +64,8 @@ export interface TableInfo {
   table_type: string;
   columns: TableColumnInfo[];
   row_count: number;
+  /** PostgreSQL schema; absent for single-namespace engines. */
+  schema?: string | null;
 }
 
 export interface GuardVerdict {
@@ -228,7 +231,13 @@ class DatabaseStore {
   activeConnection = $state<ConnectionConfig>(DEFAULT_SANDBOX_CONNECTION);
   selectedConnectionId = $state<string | null>(null);
   isConnected = $state<boolean>(false);
+  /** Tables of the active schema (what every page lists). */
   tables = $state<TableInfo[]>([]);
+  /** Every table the connection returned, across schemas. */
+  allTables = $state<TableInfo[]>([]);
+  /** Schemas found (PostgreSQL); empty for single-namespace engines. */
+  schemas = $state<string[]>([]);
+  activeSchema = $state<string | null>(null);
   isLoading = $state(false);
   activeTable = $state<string | null>(null);
   /** Last schema-load failure, so pages can show it instead of an empty list. */
@@ -236,6 +245,12 @@ class DatabaseStore {
   sessionId = $state<string | null>(null);
 
   private sessionConnectionId: string | null = null;
+  /** Live backend sessions, one per open connection (TablePlus-style multi-connection). */
+  private sessions = new Map<string, string>();
+  /** Catalog cache per open connection, so switching between them is instant. */
+  private tableCache = new Map<string, { all: TableInfo[]; schema: string | null }>();
+  /** Open connections, in rail order. */
+  openConnections = $state<ConnectionConfig[]>([]);
   private opening: Promise<string> | null = null;
   private openingFor: string | null = null;
   /** Connection id whose schema is currently cached in `tables` (null = stale/none). */
@@ -269,14 +284,23 @@ class DatabaseStore {
     await invoke('save_connection', { config: cfg });
     // Saved settings may differ from the open session (host, tunnel, timeout…): drop it so the next
     // use reconnects with them.
-    if (this.sessionConnectionId === cfg.id) await this.closeSession();
+    if (this.sessionConnectionId === cfg.id) {
+      await this.closeSession();
+    } else {
+      const sid = this.sessions.get(cfg.id) ?? null;
+      this.sessions.delete(cfg.id);
+      void this.closeSessionId(sid);
+    }
+    this.openConnections = this.openConnections.map((c) => (c.id === cfg.id ? cfg : c));
+    if (this.activeConnection.id === cfg.id) this.activeConnection = cfg;
     await this.loadConnections();
     this.selectedConnectionId = cfg.id;
   }
 
   async deleteConnection(id: string) {
     await invoke('delete_connection', { id });
-    if (this.sessionConnectionId === id) await this.closeSession();
+    if (this.openConnections.some((c) => c.id === id)) this.closeConnection(id);
+    else if (this.sessionConnectionId === id) await this.closeSession();
     await this.loadConnections();
     if (this.selectedConnectionId === id) {
       this.selectedConnectionId = this.connections[0]?.id || null;
@@ -300,14 +324,22 @@ class DatabaseStore {
   ensureSession(): Promise<string> {
     const connId = this.activeConnection.id;
     if (this.sessionId && this.sessionConnectionId === connId) return Promise.resolve(this.sessionId);
+    const known = this.sessions.get(connId);
+    if (known) {
+      this.sessionId = known;
+      this.sessionConnectionId = connId;
+      return Promise.resolve(known);
+    }
     if (this.opening && this.openingFor === connId) return this.opening;
 
     const attempt: Promise<string> = (async () => {
-      // A session that belongs to another connection is dropped first.
-      await this.closeSession();
+      // Sessions of other open connections stay alive; only this connection gets a new one.
       const info = await invoke<SessionInfo>('session_open', { connectionId: connId });
-      this.sessionId = info.session_id;
-      this.sessionConnectionId = connId;
+      this.sessions.set(connId, info.session_id);
+      if (this.activeConnection.id === connId) {
+        this.sessionId = info.session_id;
+        this.sessionConnectionId = connId;
+      }
       return info.session_id;
     })().finally(() => {
       if (this.opening === attempt) {
@@ -320,11 +352,18 @@ class DatabaseStore {
     return attempt;
   }
 
+  /** Closes the active connection's backend session (it is reopened on next use). */
   async closeSession() {
     const id = this.sessionId;
+    const connId = this.sessionConnectionId;
     this.sessionId = null;
     this.sessionConnectionId = null;
     this.schemaFor = null;
+    if (connId) this.sessions.delete(connId);
+    await this.closeSessionId(id);
+  }
+
+  private async closeSessionId(id: string | null) {
     if (id) {
       try {
         await invoke('session_close', { sessionId: id });
@@ -344,25 +383,107 @@ class DatabaseStore {
     }
   }
 
+  /** Remembers the current connection's tabs and schema before another one takes over. */
+  private parkActive() {
+    const id = this.activeConnection.id;
+    if (!this.isConnected || !this.openConnections.some((c) => c.id === id)) return;
+    workspace.park(id);
+    const cached = this.tableCache.get(id);
+    if (cached) cached.schema = this.activeSchema;
+  }
+
   async connect(conn: ConnectionConfig) {
+    this.parkActive();
+    // "Connect" always starts fresh so edited settings take effect.
+    const old = this.sessions.get(conn.id) ?? null;
+    this.sessions.delete(conn.id);
+    this.tableCache.delete(conn.id);
+    workspace.forget(conn.id);
+    void this.closeSessionId(old);
+
     this.activeConnection = conn;
     this.selectedConnectionId = conn.id;
-    // "Connect" always starts fresh so edited settings take effect.
-    await this.closeSession();
+    this.sessionId = null;
+    this.sessionConnectionId = null;
+    this.schemaFor = null;
+    workspace.reset();
+    this.activeTable = null;
+    this.activeSchema = null;
     try {
       await this.ensureSession();
       this.isConnected = true;
+      const i = this.openConnections.findIndex((c) => c.id === conn.id);
+      this.openConnections = i < 0 ? [...this.openConnections, conn] : this.openConnections.map((c) => (c.id === conn.id ? conn : c));
       await this.loadTables(true);
     } catch (e) {
+      this.openConnections = this.openConnections.filter((c) => c.id !== conn.id);
       this.isConnected = false;
       this.loadError = messageOf(e);
       throw e;
     }
   }
 
+  /** Switches to another open connection without reconnecting (rail click, Ctrl+1…9). */
+  async switchConnection(id: string) {
+    if (this.isConnected && id === this.activeConnection.id) return;
+    const conn = this.openConnections.find((c) => c.id === id);
+    if (!conn) return;
+    this.parkActive();
+    this.activeConnection = conn;
+    this.selectedConnectionId = conn.id;
+    const sid = this.sessions.get(id) ?? null;
+    this.sessionId = sid;
+    this.sessionConnectionId = sid ? id : null;
+    this.isConnected = true;
+    const cached = this.tableCache.get(id);
+    if (cached) {
+      this.activeSchema = cached.schema;
+      this.applyTables(cached.all);
+      this.schemaFor = id;
+    } else {
+      this.activeSchema = null;
+      this.applyTables([]);
+      this.schemaFor = null;
+    }
+    workspace.unpark(id);
+    this.activeTable = workspace.active;
+    if (!cached) await this.loadTables(true);
+  }
+
+  /** Closes the active connection; another open one (if any) takes over. */
   disconnect() {
-    this.isConnected = false;
-    void this.closeSession();
+    const id = this.activeConnection.id;
+    const sid = this.sessions.get(id) ?? this.sessionId;
+    this.sessions.delete(id);
+    this.tableCache.delete(id);
+    workspace.forget(id);
+    this.openConnections = this.openConnections.filter((c) => c.id !== id);
+    this.sessionId = null;
+    this.sessionConnectionId = null;
+    this.schemaFor = null;
+    void this.closeSessionId(sid);
+    const next = this.openConnections[this.openConnections.length - 1];
+    if (next) {
+      this.isConnected = false; // so switchConnection does not park the closed one
+      void this.switchConnection(next.id);
+    } else {
+      this.isConnected = false;
+      workspace.reset();
+    }
+  }
+
+  /** Closes one open connection from the rail. */
+  closeConnection(id: string) {
+    if (id === this.activeConnection.id) {
+      this.disconnect();
+      return;
+    }
+    const sid = this.sessions.get(id) ?? null;
+    this.sessions.delete(id);
+    this.tableCache.delete(id);
+    workspace.forget(id);
+    this.openConnections = this.openConnections.filter((c) => c.id !== id);
+    void this.closeSessionId(sid);
   }
 
   // ---- Schema ------------------------------------------------------------------------------
@@ -382,13 +503,15 @@ class DatabaseStore {
       try {
         const sid = await this.ensureSession();
         const tbls = await invoke<TableInfo[]>('session_list_tables', { sessionId: sid });
-        this.tables = tbls || [];
+        if (this.activeConnection.id !== connId) return; // switched away meanwhile
+        this.applyTables(tbls || []);
         this.schemaFor = connId;
+        this.tableCache.set(connId, { all: this.allTables, schema: this.activeSchema });
         if (this.tables.length > 0 && !this.tables.some((t) => t.name === this.activeTable)) {
           this.activeTable = this.tables[0].name;
         }
       } catch (e) {
-        this.tables = [];
+        this.applyTables([]);
         this.schemaFor = null;
         this.loadError = messageOf(e);
       } finally {
@@ -398,6 +521,30 @@ class DatabaseStore {
     })();
     this.schemaLoad = run;
     return run;
+  }
+
+  /** Splits the catalog by schema and keeps (or picks) the active one. */
+  private applyTables(all: TableInfo[]) {
+    this.allTables = all;
+    const schemas = [...new Set(all.map((t) => t.schema).filter((s): s is string => !!s))].sort();
+    this.schemas = schemas;
+    if (schemas.length === 0) {
+      this.activeSchema = null;
+    } else if (!this.activeSchema || !schemas.includes(this.activeSchema)) {
+      this.activeSchema = schemas.includes('public') ? 'public' : schemas[0];
+    }
+    this.tables = this.activeSchema ? all.filter((t) => t.schema === this.activeSchema) : all;
+  }
+
+  /** Switches the schema shown in the sidebar; open tabs belong to the old one and close. */
+  setSchema(schema: string) {
+    if (schema === this.activeSchema || !this.schemas.includes(schema)) return;
+    this.activeSchema = schema;
+    const cached = this.tableCache.get(this.activeConnection.id);
+    if (cached) cached.schema = schema;
+    this.tables = this.allTables.filter((t) => t.schema === schema);
+    this.activeTable = null;
+    workspace.reset();
   }
 
   /** Marks the cached schema/row counts stale; the next `loadTables()` refetches. */
@@ -440,7 +587,7 @@ class DatabaseStore {
   async browseTable(request: BrowseRequest): Promise<BrowseResult> {
     const run = async () => {
       const sid = await this.ensureSession();
-      return invoke<BrowseResult>('session_browse', { sessionId: sid, request });
+      return invoke<BrowseResult>('session_browse', { sessionId: sid, request: this.withSchema(request) });
     };
     try {
       try {
@@ -458,19 +605,22 @@ class DatabaseStore {
   /** Columns, keys, foreign keys, indexes and DDL of a table, read from the database's catalog. */
   async describeTable(table: string, schema: string | null = null): Promise<TableStructure> {
     const sid = await this.ensureSession();
-    return invoke<TableStructure>('session_describe_table', { sessionId: sid, table, schema });
+    return invoke<TableStructure>('session_describe_table', { sessionId: sid, table, schema: schema ?? this.activeSchema });
   }
 
   /** The exact SQL a staged change set will run (shown before commit). Touches nothing. */
   async previewChanges(changes: ChangeSet): Promise<string[]> {
     const sid = await this.ensureSession();
-    return invoke<string[]>('session_preview_changes', { sessionId: sid, changes });
+    return invoke<string[]>('session_preview_changes', { sessionId: sid, changes: { ...changes, schema: changes.schema ?? this.activeSchema } });
   }
 
   /** Applies a staged change set in ONE backend transaction; rejects (and saves nothing) on failure. */
   async applyChanges(changes: ChangeSet): Promise<ApplyResult> {
     const sid = await this.ensureSession();
-    const result = await invoke<ApplyResult>('session_apply_changes', { sessionId: sid, changes });
+    const result = await invoke<ApplyResult>('session_apply_changes', {
+      sessionId: sid,
+      changes: { ...changes, schema: changes.schema ?? this.activeSchema },
+    });
     this.invalidateSchema(); // row counts changed
     return result;
   }
@@ -478,7 +628,12 @@ class DatabaseStore {
   /** The dialect-correct `SELECT` for a browse request, built by the backend (never by the UI). */
   async buildSelect(request: BrowseRequest): Promise<string> {
     const sid = await this.ensureSession();
-    return invoke<string>('session_build_select', { sessionId: sid, request });
+    return invoke<string>('session_build_select', { sessionId: sid, request: this.withSchema(request) });
+  }
+
+  /** Browse requests target the active schema unless they name one. */
+  private withSchema(request: BrowseRequest): BrowseRequest {
+    return request.schema || !this.activeSchema ? request : { ...request, schema: this.activeSchema };
   }
 
   async evaluateSafety(sql: string): Promise<GuardVerdict> {
@@ -490,7 +645,7 @@ class DatabaseStore {
   }
 
   setActiveConnection(conn: ConnectionConfig) {
-    if (conn.id !== this.activeConnection.id) {
+    if (conn.id !== this.activeConnection.id && !this.openConnections.some((c) => c.id === this.activeConnection.id)) {
       void this.closeSession();
     }
     this.activeConnection = conn;

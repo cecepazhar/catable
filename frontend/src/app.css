@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* CAUI design tokens (--ca-*); CATable's brand comes from [data-theme="catable"] on <html>. */
+@import "@cecepazhar/caui/tokens.css";
 
 button, [role="button"], a, input[type="submit"], input[type="button"], select {
   cursor: pointer !important;

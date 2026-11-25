@@ -19,7 +19,8 @@
   import WindowControls from '$lib/components/WindowControls.svelte';
   import Logo from '$lib/components/Logo.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
-  import { getPalette } from '$lib/stores/commandPalette.svelte';
+  import { getPalette, openPalette } from '$lib/stores/commandPalette.svelte';
+  import { workspace } from '$lib/stores/workspace.svelte';
   import AmbientGlow from '$lib/components/AmbientGlow.svelte';
   import BottomNav from '$lib/components/BottomNav.svelte';
   import AllMenusSheet from '$lib/components/AllMenusSheet.svelte';
@@ -71,10 +72,140 @@
       t.name.toLowerCase().includes(tableSearch.toLowerCase())
     )
   );
+  const isView = (t: { table_type: string }) => /view/i.test(t.table_type);
+  const sidebarTables = $derived(filteredTables.filter((t) => !isView(t)));
+  const sidebarViews = $derived(filteredTables.filter(isView));
+  let tablesExpanded = $state(true);
+  let viewsExpanded = $state(true);
+
+  /** Full-bleed routes: the workspace fills the card edge to edge, like TablePlus. */
+  const isWorkspaceRoute = $derived(
+    page.url.pathname === '/table-browser' || page.url.pathname === '/sql-studio'
+  );
+
+  const DRIVER_LABEL: Record<string, string> = {
+    postgres: 'PostgreSQL',
+    mysql: 'MySQL',
+    mariadb: 'MariaDB',
+    sqlite: 'SQLite',
+    duckdb: 'DuckDB',
+    redis: 'Redis',
+  };
+  const ENV_STYLE: Record<string, { label: string; cls: string; dot: string }> = {
+    development: { label: 'DEV', cls: 'bg-emerald-500/12 border-emerald-500/40 text-emerald-600 dark:text-emerald-300', dot: 'bg-emerald-500' },
+    staging: { label: 'STAGING', cls: 'bg-amber-500/12 border-amber-500/40 text-amber-700 dark:text-amber-300', dot: 'bg-amber-500' },
+    production: { label: 'PROD', cls: 'bg-rose-500/15 border-rose-500/50 text-rose-700 dark:text-rose-300', dot: 'bg-rose-500' },
+  };
+  const envStyle = $derived(ENV_STYLE[dbStore.activeConnection.environment] ?? ENV_STYLE.development);
+  /** "PostgreSQL : SSH : shop : orders" — where you are, TablePlus style. */
+  const statusPath = $derived.by(() => {
+    const c = dbStore.activeConnection;
+    const parts = [DRIVER_LABEL[c.driver] ?? c.driver];
+    if (c.ssh_tunnel?.enabled) parts.push('SSH');
+    const db = c.driver === 'sqlite' || c.driver === 'duckdb' ? c.database.split(/[\\/]/).pop() : c.database;
+    if (db) parts.push(db);
+    if (dbStore.activeSchema && dbStore.schemas.length > 1) parts.push(dbStore.activeSchema);
+    if (workspace.active && page.url.pathname === '/table-browser') parts.push(workspace.active);
+    return parts;
+  });
+
+  function openTable(name: string) {
+    workspace.open(name);
+    if (page.url.pathname !== '/table-browser') void goto('/table-browser');
+  }
+
+  /** TablePlus-style shortcuts. Ctrl+S, Ctrl+Enter and grid keys live on their pages. */
+  function onGlobalKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      mobileDrawerOpen = false;
+      allMenusSheetOpen = false;
+      closeAiChat();
+      return;
+    }
+    if (e.altKey || e.metaKey || !e.ctrlKey) {
+      // Ctrl+Tab cycling is the only shortcut handled without the plain-Ctrl check.
+      return;
+    }
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === 'Tab') {
+      if (dbStore.isConnected && workspace.tabs.length > 1) {
+        e.preventDefault();
+        workspace.cycle(e.shiftKey ? -1 : 1);
+        if (page.url.pathname !== '/table-browser') void goto('/table-browser');
+      }
+      return;
+    }
+    if (e.shiftKey) return;
+    // Ctrl+1…9: switch between open connections (e.code so AZERTY works too).
+    const digit = /^Digit([1-9])$/.exec(e.code);
+    if (digit) {
+      const target = dbStore.openConnections[Number(digit[1]) - 1];
+      if (target) {
+        e.preventDefault();
+        switchConnection(target.id);
+      }
+      return;
+    }
+    switch (key) {
+      case 'p':
+      case 'k':
+        e.preventDefault();
+        openPalette();
+        break;
+      case 't':
+        if (dbStore.isConnected) {
+          e.preventDefault();
+          void goto('/sql-studio');
+        }
+        break;
+      case 'w':
+        if (dbStore.isConnected && page.url.pathname === '/table-browser' && workspace.active) {
+          e.preventDefault();
+          workspace.close(workspace.active);
+        }
+        break;
+      case 'r':
+        // Also stops WebView2 from reloading the whole app.
+        e.preventDefault();
+        if (dbStore.isConnected && page.url.pathname === '/table-browser') workspace.refresh();
+        break;
+      case 'f':
+        if (dbStore.isConnected && page.url.pathname === '/table-browser') {
+          e.preventDefault();
+          workspace.filtersOpen = !workspace.filtersOpen;
+        }
+        break;
+      case 'i':
+        if (dbStore.isConnected && page.url.pathname === '/table-browser') {
+          e.preventDefault();
+          workspace.inspectorOpen = !workspace.inspectorOpen;
+        }
+        break;
+      case '[':
+        if (workspace.canBack) {
+          e.preventDefault();
+          workspace.goBack();
+        }
+        break;
+      case ']':
+        if (workspace.canForward) {
+          e.preventDefault();
+          workspace.goForward();
+        }
+        break;
+    }
+  }
 
   onMount(async () => {
     initTheme();
-    await dbStore.loadConnections();
+    const boot = (window as any).__catableBoot;
+    boot?.step('Loading connections…', 55);
+    try {
+      await dbStore.loadConnections();
+      boot?.step('Ready', 95);
+    } finally {
+      boot?.done();
+    }
     getPendingCrashReport()
       .then((report) => {
         pendingCrashReport = report;
@@ -129,7 +260,18 @@
 
   function handleDisconnect() {
     dbStore.disconnect();
-    void goto('/');
+    void goto(dbStore.openConnections.length > 0 ? '/table-browser' : '/');
+  }
+
+  function switchConnection(id: string) {
+    void dbStore.switchConnection(id);
+    if (page.url.pathname === '/' || page.url.pathname === '/groups') void goto('/table-browser');
+  }
+
+  function closeConnection(id: string) {
+    const wasActive = dbStore.activeConnection.id === id;
+    dbStore.closeConnection(id);
+    if (wasActive && dbStore.openConnections.length === 0) void goto('/');
   }
 
   async function deleteConnFromSidebar(conn: ConnectionConfig) {
@@ -152,15 +294,7 @@
   let { children } = $props();
 </script>
 
-<svelte:window
-  onkeydown={(e) => {
-    if (e.key === 'Escape') {
-      mobileDrawerOpen = false;
-      allMenusSheetOpen = false;
-      closeAiChat();
-    }
-  }}
-/>
+<svelte:window onkeydown={onGlobalKey} />
 
 <NotificationCenter />
 <CommandPalette onLock={() => {}} />
@@ -201,15 +335,22 @@
         </a>
         <span class="text-neutral-400 dark:text-neutral-600">/</span>
         {#if dbStore.isConnected}
-          <div class="flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800/60 truncate">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span class="truncate">{dbStore.activeConnection.name}</span>
-            <span class="text-[10px] font-mono uppercase opacity-75">({dbStore.activeConnection.driver})</span>
+          <!-- Connection status bar: colour = environment, path = where you are (TablePlus style) -->
+          <div
+            class="flex items-center gap-2 px-2.5 py-1 rounded-lg border font-mono text-[11px] min-w-0 max-w-[640px] {envStyle.cls}"
+            title="{dbStore.activeConnection.name} — {dbStore.activeConnection.environment}"
+          >
+            <span class="flex items-center gap-1.5 font-bold shrink-0">
+              <span class="w-1.5 h-1.5 rounded-full {envStyle.dot}"></span>
+              {envStyle.label}
+            </span>
+            <span class="opacity-40 shrink-0">|</span>
+            <span class="font-semibold truncate shrink-0 max-w-[160px]">{dbStore.activeConnection.name}</span>
+            {#each statusPath as part}
+              <span class="opacity-40 shrink-0">:</span>
+              <span class="truncate">{part}</span>
+            {/each}
           </div>
-          {#if dbStore.activeTable && page.url.pathname === '/table-browser'}
-            <span class="text-neutral-400 dark:text-neutral-600">/</span>
-            <span class="font-mono text-neutral-700 dark:text-neutral-300">{dbStore.activeTable}</span>
-          {/if}
         {:else if page.url.pathname === '/services'}
           <span class="font-medium text-emerald-600 dark:text-emerald-400">Services (v{APP_VERSION})</span>
         {:else if page.url.pathname === '/settings'}
@@ -279,6 +420,45 @@
   <!-- App Body: Two-State Dynamic Sidebar + Main Content -->
   <div class="flex-1 flex min-h-0 relative overflow-visible">
     
+    <!-- Open-connections rail (TablePlus): one icon per live connection -->
+    {#if dbStore.openConnections.length > 0}
+      <nav class="hidden md:flex flex-col items-center gap-1.5 w-14 shrink-0 pt-2 pb-2 border-r border-[var(--ca-border)]" aria-label="Open connections">
+        {#each dbStore.openConnections as oc, idx (oc.id)}
+          {@const on = dbStore.isConnected && dbStore.activeConnection.id === oc.id}
+          {@const env = ENV_STYLE[oc.environment] ?? ENV_STYLE.development}
+          <div class="group relative w-11">
+            <button
+              type="button"
+              onclick={() => switchConnection(oc.id)}
+              title="{oc.name} ({oc.driver}, {oc.environment}){idx < 9 ? ` — Ctrl+${idx + 1}` : ''}"
+              aria-label="Switch to {oc.name}"
+              aria-current={on}
+              class="w-11 flex flex-col items-center gap-0.5 pt-1.5 pb-1 rounded-lg border transition-colors cursor-pointer {on ? 'bg-[var(--ca-brand-glow)] border-[var(--ca-brand)]' : 'border-transparent hover:bg-neutral-200/60 dark:hover:bg-neutral-800/70'}"
+            >
+              <DatabaseIcon driver={oc.driver} size={20} />
+              <span class="w-full px-0.5 truncate text-center text-[9px] leading-tight {on ? 'text-[var(--ca-brand)] font-semibold' : 'text-neutral-500'}">{oc.name}</span>
+              <span class="w-5 h-[2px] rounded-full {env.dot}"></span>
+            </button>
+            <button
+              type="button"
+              onclick={() => closeConnection(oc.id)}
+              class="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[9px] leading-none flex items-center justify-center bg-neutral-700 text-white opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition-opacity cursor-pointer"
+              title="Close connection"
+              aria-label="Close {oc.name}"
+            >✕</button>
+          </div>
+        {/each}
+        <a
+          href="/"
+          class="w-11 h-9 flex items-center justify-center rounded-lg border border-dashed border-[var(--ca-border)] text-neutral-400 hover:text-[var(--ca-brand)] hover:border-[var(--ca-brand)] transition-colors"
+          title="Open another connection"
+          aria-label="Open another connection"
+        >
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-width="2" d="M12 5v14M5 12h14" /></svg>
+        </a>
+      </nav>
+    {/if}
+
     <!-- Desktop Sidebar (Antares / TablePlus Dynamic Mode) -->
     <aside
       class="hidden md:flex flex-col shrink-0 bg-transparent {isCollapsed ? 'w-14' : 'w-60'} transition-[width] duration-200 ease-out will-change-[width]"
@@ -433,87 +613,127 @@
           <button
             onclick={handleDisconnect}
             class="text-[11px] font-medium text-rose-500 hover:text-rose-400 hover:bg-rose-950/40 px-2 py-1 rounded transition-colors shrink-0 cursor-pointer"
-            title="Disconnect & Return to Connections"
+            title="Close this connection (other open connections stay open)"
           >
-            Switch
+            Close
           </button>
         </div>
 
-        <!-- Workspace Nav Tabs -->
-        <div class="px-2.5 py-1 space-y-0.5 text-xs">
-          <a
-            href="/table-browser"
-            class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-colors {page.url.pathname === '/table-browser' ? 'bg-blue-600 text-white font-medium' : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 4h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-            <span>Table Browser</span>
-          </a>
-          <a
-            href="/sql-studio"
-            class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-colors {page.url.pathname === '/sql-studio' ? 'bg-blue-600 text-white font-medium' : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-            <span>SQL Studio</span>
-          </a>
-          <a
-            href="/schema-erd"
-            class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-colors {page.url.pathname === '/schema-erd' ? 'bg-blue-600 text-white font-medium' : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6z M14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z M9 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
-            <span>Schema ERD</span>
-          </a>
-          <a
-            href="/ai-copilot"
-            class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-colors {page.url.pathname === '/ai-copilot' ? 'bg-blue-600 text-white font-medium' : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
-          >
-            <svg class="w-4 h-4 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>
-            <span>AI Copilot</span>
-          </a>
-          <a
-            href="/services"
-            class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg transition-colors {page.url.pathname === '/services' ? 'bg-blue-600 text-white font-medium' : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
-          >
-            <svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" /></svg>
-            <span>Services</span>
-          </a>
-        </div>
-
-        <!-- Table Search -->
-        <div class="px-2 pt-2 pb-1 border-b border-neutral-200 dark:border-neutral-800/60">
-          <div class="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-1 px-1">Tables ({dbStore.tables.length})</div>
-          <div class="relative">
-            <input
-              type="text"
-              bind:value={tableSearch}
-              placeholder="Filter tables..."
-              class="w-full text-xs pl-7 pr-2 py-1 bg-white dark:bg-neutral-800/90 rounded-lg border border-neutral-200 dark:border-neutral-700 focus:outline-none focus:ring-1 focus:ring-blue-500 text-neutral-800 dark:text-neutral-200"
-            />
-            <svg class="w-3 h-3 absolute left-2.5 top-2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-          </div>
-        </div>
-
-        <!-- Table List -->
-        <div class="flex-1 overflow-y-auto p-1.5 space-y-0.5 text-xs scrollbar-thin">
-          {#each filteredTables as tbl (tbl.name)}
-            <button
-              onclick={() => {
-                dbStore.activeTable = tbl.name;
-                void goto('/table-browser');
-              }}
-              class="w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between transition-colors {dbStore.activeTable === tbl.name && page.url.pathname === '/table-browser' ? 'bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-medium' : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800'}"
+        <!-- Workspace nav: compact icon row -->
+        <div class="px-2.5 pb-2 flex items-center gap-1 {isCollapsed ? 'flex-col px-1.5' : ''}">
+          {#each [
+            { href: '/table-browser', title: 'Tables (Ctrl+P to jump)', d: 'M3 10h18M3 14h18m-9-4v8m-7 4h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+            { href: '/sql-studio', title: 'SQL Query (Ctrl+T)', d: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+            { href: '/schema-erd', title: 'Schema ERD', d: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6z M14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z M9 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
+            { href: '/ai-copilot', title: 'AI Copilot', d: 'M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z' },
+            { href: '/services', title: 'Services', d: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2' }
+          ] as nav (nav.href)}
+            {@const on = page.url.pathname === nav.href}
+            <a
+              href={nav.href}
+              title={nav.title}
+              aria-label={nav.title}
+              class="flex-1 w-full flex items-center justify-center py-1.5 rounded-lg border transition-colors {on ? 'bg-[var(--ca-brand-glow)] border-[var(--ca-brand)] text-[var(--ca-brand)]' : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200/60 dark:hover:bg-neutral-800/70'}"
             >
-              <div class="flex items-center gap-2 min-w-0">
-                <svg class="w-3.5 h-3.5 shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 4h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                <span class="truncate">{tbl.name}</span>
-              </div>
-              {#if tbl.row_count !== undefined}
-                <span class="text-[10px] font-mono text-neutral-400 shrink-0">{tbl.row_count}</span>
-              {/if}
-            </button>
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d={nav.d} /></svg>
+            </a>
           {/each}
         </div>
+
+        {#if !isCollapsed}
+          <!-- Item search -->
+          <div class="px-2.5 pb-1.5">
+            <div class="relative">
+              <input
+                type="text"
+                bind:value={tableSearch}
+                placeholder="Search for item…"
+                aria-label="Search tables and views"
+                class="w-full text-xs pl-7 pr-2 py-1.5 bg-white dark:bg-neutral-800/90 rounded-lg border border-neutral-200 dark:border-neutral-700/80 focus:outline-none focus:ring-1 focus:ring-[var(--ca-brand)] text-neutral-800 dark:text-neutral-200"
+              />
+              <svg class="w-3.5 h-3.5 absolute left-2 top-2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+          </div>
+
+          <!-- Item tree: Tables / Views -->
+          <div class="flex-1 overflow-y-auto px-1.5 pb-2 text-xs scrollbar-thin select-none">
+            {#snippet group(label: string, items: typeof dbStore.tables, expanded: boolean, toggle: () => void, view: boolean)}
+              <button
+                type="button"
+                onclick={toggle}
+                class="w-full flex items-center gap-1 px-1.5 py-1 mt-1 text-[11px] font-semibold text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer"
+                aria-expanded={expanded}
+              >
+                <svg class="w-3 h-3 transition-transform {expanded ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" /></svg>
+                <span>{label}</span>
+                <span class="ml-auto font-mono text-[10px] text-neutral-400">{items.length}</span>
+              </button>
+              {#if expanded}
+                {#each items as tbl (tbl.name)}
+                  {@const on = workspace.active === tbl.name && page.url.pathname === '/table-browser'}
+                  {@const open = workspace.tabs.includes(tbl.name)}
+                  <button
+                    type="button"
+                    onclick={() => openTable(tbl.name)}
+                    title="{tbl.name}{view ? ' (view)' : ''} · {tbl.row_count.toLocaleString()} rows"
+                    class="w-full text-left pl-5 pr-2 py-[3px] rounded-md flex items-center gap-2 font-mono text-[12px] transition-colors {on ? 'bg-[var(--ca-brand-glow)] text-[var(--ca-brand)] font-semibold' : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200/60 dark:hover:bg-neutral-800/70'}"
+                  >
+                    {#if view}
+                      <svg class="w-3.5 h-3.5 shrink-0 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                    {:else}
+                      <svg class="w-3.5 h-3.5 shrink-0 text-sky-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 4h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                    {/if}
+                    <span class="truncate flex-1">{tbl.name}</span>
+                    {#if open && !on}
+                      <span class="w-1 h-1 rounded-full bg-[var(--ca-brand)] shrink-0" title="Open in a tab"></span>
+                    {/if}
+                  </button>
+                {/each}
+              {/if}
+            {/snippet}
+
+            {#if dbStore.isLoading && dbStore.tables.length === 0}
+              <div class="px-3 py-4 text-[11px] text-neutral-400">Loading schema…</div>
+            {:else if filteredTables.length === 0}
+              <div class="px-3 py-4 text-[11px] text-neutral-400">
+                {tableSearch ? `No item matches "${tableSearch}".` : 'No tables in this database.'}
+              </div>
+            {:else}
+              {@render group('Tables', sidebarTables, tablesExpanded, () => (tablesExpanded = !tablesExpanded), false)}
+              {#if sidebarViews.length > 0}
+                {@render group('Views', sidebarViews, viewsExpanded, () => (viewsExpanded = !viewsExpanded), true)}
+              {/if}
+            {/if}
+          </div>
+          <!-- Schema picker (TablePlus: bottom of the item list) -->
+          {#if dbStore.schemas.length > 1}
+            <div class="px-2.5 pb-2 pt-1.5 border-t border-[var(--ca-border)]">
+              <label class="flex items-center gap-2 text-[11px] text-neutral-500">
+                <span class="shrink-0 font-semibold">Schema</span>
+                <select
+                  value={dbStore.activeSchema ?? ''}
+                  onchange={(e) => {
+                    dbStore.setSchema((e.currentTarget as HTMLSelectElement).value);
+                    if (page.url.pathname === '/table-browser') {
+                      const first = dbStore.tables[0]?.name;
+                      if (first) workspace.open(first);
+                    }
+                  }}
+                  class="flex-1 min-w-0 h-7 px-2 text-xs font-mono rounded-md border border-[var(--ca-border)] bg-white dark:bg-neutral-800/90 text-neutral-800 dark:text-neutral-200 focus:outline-none focus:ring-1 focus:ring-[var(--ca-brand)] cursor-pointer"
+                  aria-label="Schema"
+                >
+                  {#each dbStore.schemas as s}
+                    <option value={s}>{s} ({dbStore.allTables.filter((t) => t.schema === s).length})</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
+          {/if}
+        {:else}
+          <div class="flex-1"></div>
+        {/if}
       {/if}
 
       <!-- Bottom User Profile Card (CATerm Standard) -->
@@ -527,7 +747,7 @@
       <AmbientGlow defaultAccent="#0ea5e9" />
 
       <main class="flex-1 min-w-0 flex overflow-hidden relative z-10 bg-white dark:bg-[#161616] {cardBorderClass} rounded-tl-2xl transition-colors duration-150">
-        <div class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden text-neutral-900 dark:text-neutral-100 relative px-4 py-6 md:px-8 md:py-8 bg-[linear-gradient(to_right,#0000000a_1px,transparent_1px),linear-gradient(to_bottom,#0000000a_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:56px_56px] z-20">
+        <div class="flex-1 min-w-0 overflow-x-hidden text-neutral-900 dark:text-neutral-100 relative z-20 {isWorkspaceRoute ? 'overflow-hidden' : 'overflow-y-auto px-4 py-6 md:px-8 md:py-8'} bg-[linear-gradient(to_right,#0000000a_1px,transparent_1px),linear-gradient(to_bottom,#0000000a_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:56px_56px] z-20">
           {#key page.url.pathname}
             <div class="route-view h-full">
               {@render children()}

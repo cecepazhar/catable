@@ -110,7 +110,26 @@ pub fn run() {
             commands::svc_probe,
             commands::svc_test_connection
         ])
+        // The window starts hidden (tauri.conf.json `visible: false`) and is shown once the
+        // page — whose first paint is the boot splash — has loaded, so the user never sees
+        // WebView2's blank white surface.
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let _ = webview.window().show();
+                let _ = webview.window().set_focus();
+            }
+        })
         .setup(|app| {
+            use tauri::Manager;
+            // Safety net: show the window even if the load event never arrives.
+            if let Some(w) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(2500));
+                    if !w.is_visible().unwrap_or(true) {
+                        let _ = w.show();
+                    }
+                });
+            }
             commands::spawn_service_autostart(app.handle().clone());
             Ok(())
         });

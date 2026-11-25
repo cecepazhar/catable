@@ -125,6 +125,41 @@
     duckdb: { port: 0, user: '', database: 'app.duckdb' },
   };
 
+  /** Strips the quotes Windows' "Copy as path" puts around a path. */
+  function cleanFilePath(raw: string): string {
+    let s = raw.trim();
+    if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
+      s = s.slice(1, -1).trim();
+    }
+    return s;
+  }
+
+  async function browseDatabaseFile() {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        title: form.driver === 'duckdb' ? 'Open DuckDB database' : 'Open SQLite database',
+        filters:
+          form.driver === 'duckdb'
+            ? [{ name: 'DuckDB', extensions: ['duckdb', 'ddb', 'db'] }, { name: 'All files', extensions: ['*'] }]
+            : [
+                { name: 'SQLite', extensions: ['db', 'db3', 'sqlite', 'sqlite3', 's3db', 'sl3'] },
+                { name: 'All files', extensions: ['*'] },
+              ],
+      });
+      if (typeof picked === 'string' && picked) {
+        form.database = picked;
+        if (!form.name.trim() || form.name === 'Local Sandbox DB') {
+          form.name = picked.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || form.name;
+        }
+      }
+    } catch (e) {
+      showToast(errorText(e) || 'Could not open the file picker.', 'error');
+    }
+  }
+
   function isFileDriver(driver: DriverKind): boolean {
     return driver === 'sqlite' || driver === 'duckdb';
   }
@@ -416,6 +451,7 @@
         group_name: form.group_name?.trim() || null,
       };
       if (isFileDriver(toSave.driver)) {
+        toSave.database = cleanFilePath(toSave.database);
         toSave.ssh_tunnel = null;
         toSave.port = 0;
         toSave.user = '';
@@ -449,6 +485,7 @@
         group_name: form.group_name?.trim() || null,
       };
       if (isFileDriver(toSave.driver)) {
+        toSave.database = cleanFilePath(toSave.database);
         toSave.ssh_tunnel = null;
         toSave.port = 0;
         toSave.user = '';
@@ -1083,14 +1120,26 @@
                   <label for="modal-file-path" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
                     Database File Path
                   </label>
-                  <input
-                    id="modal-file-path"
-                    type="text"
-                    bind:value={form.database}
-                    placeholder={form.driver === 'sqlite' ? 'sandbox.db or /path/to/db.sqlite or :memory:' : 'app.duckdb or /path/to/data.duckdb'}
-                    class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
-                  />
-                  <p class="text-[10px] text-neutral-500">File-based database. Host, port, username, and password are not required.</p>
+                  <div class="flex gap-2">
+                    <input
+                      id="modal-file-path"
+                      type="text"
+                      bind:value={form.database}
+                      onblur={() => (form.database = cleanFilePath(form.database))}
+                      placeholder={form.driver === 'sqlite' ? 'D:\\data\\app.db3  ·  or a name like sandbox.db' : 'D:\\data\\app.duckdb  ·  or a name like app.duckdb'}
+                      class="flex-1 min-w-0 px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white"
+                    />
+                    <button
+                      type="button"
+                      onclick={browseDatabaseFile}
+                      class="px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer shrink-0"
+                    >
+                      Browse…
+                    </button>
+                  </div>
+                  <p class="text-[10px] text-neutral-500">
+                    Pick an existing file ({form.driver === 'duckdb' ? '.duckdb' : '.db, .db3, .sqlite, .sqlite3'}). A full path that does not exist is reported as an error; a bare name is created in CATable's data folder.
+                  </p>
                 </div>
               {:else}
                 <div class="space-y-1.5">

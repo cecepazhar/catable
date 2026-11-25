@@ -14,9 +14,13 @@
     /** Columns that are (part of) a foreign key; their cells get a link to the referenced row. */
     fkColumns?: ReadonlySet<string>;
     onFollowFk?: (column: string, value: string) => void;
+    /** Columns not shown (the data is still loaded and staged). */
+    hidden?: ReadonlySet<string>;
   }
 
-  let { staging, offset, selectedRowIndex, editable, onRowClick, sortOf, onSort, fkColumns, onFollowFk }: Props = $props();
+  let { staging, offset, selectedRowIndex, editable, onRowClick, sortOf, onSort, fkColumns, onFollowFk, hidden }: Props = $props();
+
+  const cols = $derived(hidden && hidden.size ? staging.columns.filter((c) => !hidden.has(c)) : staging.columns);
 
   type Target =
     | { kind: 'row'; row: number; column: string }
@@ -121,19 +125,19 @@
 
 <table class="w-full text-left text-xs border-collapse">
   <thead
-    class="sticky top-0 bg-neutral-50 dark:bg-neutral-800 text-neutral-500 uppercase text-[10px] tracking-wider border-b border-neutral-200 dark:border-neutral-800 z-10"
+    class="sticky top-0 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-[11px] border-b border-[var(--ca-border)] z-10"
   >
     <tr>
-      <th class="py-2.5 px-3 font-semibold w-12 bg-neutral-50 dark:bg-neutral-800 text-right select-none">#</th>
-      {#each staging.columns as col}
+      <th class="py-1.5 px-2 font-semibold w-12 bg-neutral-100 dark:bg-neutral-800 text-right text-neutral-400 select-none">#</th>
+      {#each cols as col}
         {@const sorted = sortOf?.(col) ?? null}
         <th
-          class="py-2.5 px-3 font-semibold min-w-[120px]"
+          class="py-1.5 px-2.5 font-semibold min-w-[100px] whitespace-nowrap border-l border-[var(--ca-border)]"
           aria-sort={sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : 'none'}
         >
           <button
             type="button"
-            class={`inline-flex items-center gap-1 uppercase tracking-wider ${onSort ? 'cursor-pointer hover:text-neutral-900 dark:hover:text-white' : 'cursor-default'}`}
+            class={`inline-flex items-center gap-1 ${onSort ? 'cursor-pointer hover:text-neutral-900 dark:hover:text-white' : 'cursor-default'}`}
             onclick={(e) => onSort?.(col, e.shiftKey)}
             title={onSort ? 'Click to sort (Shift+click to add a column)' : undefined}
           >
@@ -148,24 +152,24 @@
         </th>
       {/each}
       {#if editable}
-        <th class="w-8 bg-neutral-50 dark:bg-neutral-800"></th>
+        <th class="w-8 bg-neutral-100 dark:bg-neutral-800"></th>
       {/if}
     </tr>
   </thead>
-  <tbody class="divide-y divide-neutral-100 dark:divide-neutral-800/80">
+  <tbody>
     {#each staging.rows as row, i}
       {@const deleted = staging.isDeleted(i)}
       <tr
-        class={`transition-colors ${deleted ? 'bg-rose-500/10 line-through text-neutral-400' : selectedRowIndex === i ? 'bg-blue-500/10' : 'hover:bg-neutral-50 dark:hover:bg-neutral-800/30'}`}
+        class={`cursor-default ${deleted ? 'bg-rose-500/10 line-through text-neutral-400' : selectedRowIndex === i ? 'bg-[var(--ca-brand-glow)] shadow-[inset_2px_0_0_var(--ca-brand)]' : i % 2 ? 'bg-neutral-50/70 dark:bg-white/[0.02] hover:bg-neutral-100 dark:hover:bg-white/[0.05]' : 'hover:bg-neutral-100 dark:hover:bg-white/[0.05]'}`}
         onclick={() => onRowClick(row, i)}
       >
-        <td class="py-2 px-3 font-mono text-neutral-400 text-[10px] bg-neutral-50/50 dark:bg-neutral-800/20 text-right select-none">
+        <td class="py-1 px-2 font-mono text-neutral-400 text-[10px] text-right select-none">
           {offset + i + 1}
         </td>
-        {#each staging.columns as col}
+        {#each cols as col}
           {@const dirty = staging.isDirty(i, col)}
           <td
-            class={`py-1.5 px-3 font-mono whitespace-nowrap ${dirty ? 'bg-amber-500/15 border-l-2 border-amber-500 text-neutral-900 dark:text-neutral-100' : 'text-neutral-700 dark:text-neutral-300'} ${editable && !deleted ? 'cursor-text' : ''}`}
+            class={`py-1 px-2.5 font-mono text-[12px] whitespace-nowrap max-w-[420px] truncate ${dirty ? 'bg-amber-500/15 border-l-2 border-amber-500 text-neutral-900 dark:text-neutral-100' : 'text-neutral-700 dark:text-neutral-300'} ${editable && !deleted ? 'cursor-text' : ''}`}
             ondblclick={() => !deleted && startEdit({ kind: 'row', row: i, column: col })}
             title={dirty ? 'Changed — not saved yet' : undefined}
           >
@@ -211,10 +215,10 @@
 
     {#each staging.inserts as ins, n}
       <tr class="bg-emerald-500/10">
-        <td class="py-2 px-3 font-mono text-emerald-600 dark:text-emerald-400 text-[10px] text-right select-none">new</td>
-        {#each staging.columns as col}
+        <td class="py-1 px-2 font-mono text-emerald-600 dark:text-emerald-400 text-[10px] text-right select-none">new</td>
+        {#each cols as col}
           <td
-            class="py-1.5 px-3 font-mono whitespace-nowrap border-l-2 border-emerald-500/40 cursor-text"
+            class="py-1 px-2.5 font-mono text-[12px] whitespace-nowrap border-l-2 border-emerald-500/40 cursor-text"
             ondblclick={() => startEdit({ kind: 'insert', index: n, column: col })}
           >
             {#if isEditing({ kind: 'insert', index: n, column: col })}

@@ -22,6 +22,9 @@ pub struct TableInfo {
     pub table_type: String,
     pub columns: Vec<TableColumnInfo>,
     pub row_count: u64,
+    /// Schema (PostgreSQL); None for engines with one namespace per connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,28 +53,52 @@ pub struct ConnectionTestResult {
 
 pub struct QueryExecutor;
 
+/// Trims whitespace and the quotes Windows' "Copy as path" adds around a file path.
+pub fn clean_file_path(raw: &str) -> &str {
+    let s = raw.trim();
+    let s = s.strip_prefix('"').and_then(|x| x.strip_suffix('"')).unwrap_or(s);
+    let s = s.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')).unwrap_or(s);
+    s.trim()
+}
+
+/// True when the text names a location (has a folder separator, a drive, or `~`), as opposed
+/// to a bare file name that should live in the app data folder.
+fn looks_like_path(s: &str) -> bool {
+    s.contains('/') || s.contains('\\') || s.starts_with('~') || s.as_bytes().get(1) == Some(&b':')
+}
+
 impl QueryExecutor {
     /// Resolves the sqlite path for a connection config.
     /// If empty or ":memory:", points to the app's default sandbox.db.
     pub fn resolve_sqlite_path(conn: &ConnectionConfig) -> Result<PathBuf, CatableError> {
         let dir = app_data_dir()?;
-        if conn.database.is_empty() || conn.database == ":memory:" || conn.database == "sandbox" {
+        let raw = clean_file_path(&conn.database);
+        if raw.is_empty() || raw == ":memory:" || raw == "sandbox" {
             let sandbox_path = dir.join("sandbox.db");
             Self::ensure_sample_data(&sandbox_path)?;
-            Ok(sandbox_path)
-        } else {
-            let path = PathBuf::from(&conn.database);
-            if !path.exists() {
-                // If it's a relative name, place inside app data dir
-                let in_app_dir = dir.join(&conn.database);
-                if !in_app_dir.exists() {
-                    Self::ensure_sample_data(&in_app_dir)?;
-                }
-                Ok(in_app_dir)
-            } else {
-                Ok(path)
-            }
+            return Ok(sandbox_path);
         }
+        let path = PathBuf::from(raw);
+        if path.exists() {
+            return Ok(path);
+        }
+        // A real path (folder or drive in it) that is missing is an error — never silently
+        // create a sample database in its place, or the user "opens" the wrong file.
+        if looks_like_path(raw) {
+            return Err(CatableError::Driver {
+                driver: "sqlite".into(),
+                message: format!(
+                    "Database file not found: {}. Check the path, or use Browse to pick the file.",
+                    path.display()
+                ),
+            });
+        }
+        // A bare name ("notes.db") lives in the app data folder and is created on first use.
+        let in_app_dir = dir.join(raw);
+        if !in_app_dir.exists() {
+            Self::ensure_sample_data(&in_app_dir)?;
+        }
+        Ok(in_app_dir)
     }
 
     /// Seeds the sandbox database with sample e-commerce data if empty.
@@ -357,6 +384,7 @@ impl QueryExecutor {
                 table_type,
                 columns: cols,
                 row_count,
+                schema: None,
             });
         }
 
@@ -622,12 +650,14 @@ pub(crate) async fn describe_postgres(
     client: &tokio_postgres::Client,
 ) -> Result<Vec<TableInfo>, CatableError> {
 
+
     let table_rows = client
         .query(
-            "SELECT table_name, table_type \
+            "SELECT table_schema, table_name, table_type \
              FROM information_schema.tables \
              WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
-             ORDER BY table_name ASC",
+               AND table_schema NOT LIKE 'pg_toast%' AND table_schema NOT LIKE 'pg_temp%' \
+             ORDER BY table_schema, table_name ASC",
             &[],
         )
         .await
@@ -639,6 +669,7 @@ pub(crate) async fn describe_postgres(
     let col_rows = client
         .query(
             "SELECT \
+                 c.table_schema, \
                  c.table_name, \
                  c.column_name, \
                  c.data_type, \
@@ -646,16 +677,17 @@ pub(crate) async fn describe_postgres(
                  CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END as is_pk \
              FROM information_schema.columns c \
              LEFT JOIN ( \
-                 SELECT kcu.table_name, kcu.column_name \
+                 SELECT kcu.table_schema, kcu.table_name, kcu.column_name \
                  FROM information_schema.table_constraints tc \
                  JOIN information_schema.key_column_usage kcu \
                      ON tc.constraint_name = kcu.constraint_name \
                      AND tc.table_schema = kcu.table_schema \
                  WHERE tc.constraint_type = 'PRIMARY KEY' \
                      AND tc.table_schema NOT IN ('pg_catalog', 'information_schema') \
-             ) pk ON c.table_name = pk.table_name AND c.column_name = pk.column_name \
+             ) pk ON c.table_schema = pk.table_schema AND c.table_name = pk.table_name \
+                 AND c.column_name = pk.column_name \
              WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema') \
-             ORDER BY c.table_name, c.ordinal_position",
+             ORDER BY c.table_schema, c.table_name, c.ordinal_position",
             &[],
         )
         .await
@@ -666,29 +698,31 @@ pub(crate) async fn describe_postgres(
 
     let stat_rows = client
         .query(
-            "SELECT relname, COALESCE(n_live_tup, 0) as row_count \
+            "SELECT schemaname::text, relname::text, COALESCE(n_live_tup, 0) as row_count \
              FROM pg_stat_user_tables",
             &[],
         )
         .await
         .unwrap_or_default();
 
-    let mut row_counts: HashMap<String, u64> = HashMap::new();
+    let mut row_counts: HashMap<(String, String), u64> = HashMap::new();
     for r in stat_rows {
-        let name: String = r.get(0);
-        let count: i64 = r.get(1);
-        row_counts.insert(name, count.max(0) as u64);
+        let schema: String = r.get(0);
+        let name: String = r.get(1);
+        let count: i64 = r.get(2);
+        row_counts.insert((schema, name), count.max(0) as u64);
     }
 
-    let mut col_map: HashMap<String, Vec<TableColumnInfo>> = HashMap::new();
+    let mut col_map: HashMap<(String, String), Vec<TableColumnInfo>> = HashMap::new();
     for cr in col_rows {
-        let tbl: String = cr.get(0);
-        let name: String = cr.get(1);
-        let data_type: String = cr.get(2);
-        let is_nullable: String = cr.get(3);
-        let is_pk: bool = cr.get(4);
+        let schema: String = cr.get(0);
+        let tbl: String = cr.get(1);
+        let name: String = cr.get(2);
+        let data_type: String = cr.get(3);
+        let is_nullable: String = cr.get(4);
+        let is_pk: bool = cr.get(5);
 
-        col_map.entry(tbl).or_default().push(TableColumnInfo {
+        col_map.entry((schema, tbl)).or_default().push(TableColumnInfo {
             name,
             data_type,
             is_pk,
@@ -698,16 +732,20 @@ pub(crate) async fn describe_postgres(
 
     let mut tables = Vec::new();
     for tr in table_rows {
-        let name: String = tr.get(0);
-        let table_type: String = tr.get(1);
-        let columns = col_map.remove(&name).unwrap_or_default();
-        let row_count = row_counts.get(&name).copied().unwrap_or(0);
+        let schema: String = tr.get(0);
+        let name: String = tr.get(1);
+        let table_type: String = tr.get(2);
+        let key = (schema, name);
+        let columns = col_map.remove(&key).unwrap_or_default();
+        let row_count = row_counts.get(&key).copied().unwrap_or(0);
+        let (schema, name) = key;
 
         tables.push(TableInfo {
             name,
             table_type,
             columns,
             row_count,
+            schema: Some(schema),
         });
     }
 
@@ -1058,6 +1096,7 @@ pub(crate) async fn describe_mysql(
             table_type,
             columns,
             row_count,
+            schema: None,
         });
     }
 
@@ -1301,6 +1340,35 @@ mod tests {
             group_name: None,
             workspace_id: None,
         }
+    }
+
+    #[test]
+    fn cleans_copy_as_path_quotes() {
+        assert_eq!(clean_file_path(r#""D:\GLESCOPE_DB\glescope_db.db3""#), r"D:\GLESCOPE_DB\glescope_db.db3");
+        assert_eq!(clean_file_path("  'a.db'  "), "a.db");
+        assert_eq!(clean_file_path("sandbox.db"), "sandbox.db");
+    }
+
+    #[test]
+    fn missing_full_path_is_an_error_not_a_new_sample_db() {
+        let mut conn = test_conn();
+        let missing = std::env::temp_dir().join("catable-definitely-missing").join("nope.db3");
+        conn.database = format!("\"{}\"", missing.display());
+        let err = QueryExecutor::resolve_sqlite_path(&conn).unwrap_err().to_string();
+        assert!(err.contains("Database file not found"), "{err}");
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn existing_quoted_path_opens_that_file() {
+        let dir = std::env::temp_dir().join(format!("catable-path-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("real.db3");
+        rusqlite::Connection::open(&file).unwrap().execute_batch("CREATE TABLE t(x)").unwrap();
+        let mut conn = test_conn();
+        conn.database = format!("\"{}\"", file.display());
+        assert_eq!(QueryExecutor::resolve_sqlite_path(&conn).unwrap(), file);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

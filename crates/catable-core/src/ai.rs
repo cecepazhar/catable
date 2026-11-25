@@ -442,6 +442,7 @@ mod tests {
                 },
             ],
             row_count: 1000,
+            schema: None,
         }];
         let ctx = SchemaContext {
             driver: "SQLite".into(),

@@ -7,7 +7,7 @@
   import LoadingState from '$lib/components/LoadingState.svelte';
   import RowDetailsInspector from '$lib/components/RowDetailsInspector.svelte';
 
-  let sqlQuery = $state('SELECT * FROM users LIMIT 10;');
+  let sqlQuery = $state('SELECT 1;');
   let isExecuting = $state(false);
   let result = $state<QueryResult | null>(null);
   let selectedTab = $state<'results' | 'messages' | 'schema'>('results');
@@ -69,6 +69,15 @@
       sqlQuery = queryParam;
       void runQuery(queryParam);
     } else {
+      // Start from the table the user is looking at, not a hard-coded sample.
+      const table = dbStore.activeTable ?? dbStore.tables[0]?.name;
+      if (table) {
+        try {
+          sqlQuery = (await dbStore.buildSelect({ table, limit: 100, with_total: false })) + ';';
+        } catch {
+          /* keep the default text */
+        }
+      }
       void refreshSafety(sqlQuery);
     }
   });
@@ -173,195 +182,138 @@
   }
 </script>
 
-<div class="flex flex-col h-full overflow-hidden p-4 max-w-7xl mx-auto w-full space-y-4">
-  <!-- Header -->
-  <div class="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3 shrink-0">
-    <div class="flex items-center gap-3">
-      <h2 class="text-sm font-bold text-neutral-900 dark:text-white">SQL Query Studio</h2>
-      <span class="text-[10px] font-mono bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400 px-2 py-0.5 rounded">
-        Active: {dbStore.activeConnection.name} ({dbStore.activeConnection.driver})
+<div class="flex flex-col h-full overflow-hidden">
+  <!-- Toolbar -->
+  <div class="h-10 px-3 flex items-center gap-2 border-b border-[var(--ca-border)] bg-neutral-50/80 dark:bg-neutral-900/70 shrink-0">
+    <span class="text-xs font-semibold text-neutral-800 dark:text-neutral-100">SQL Query</span>
+    {#if verdict}
+      <span class={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${RISK_STYLES[verdict.risk]?.badge || ''}`}>
+        {verdictIsLoading ? 'ANALYZING…' : RISK_STYLES[verdict.risk]?.label || verdict.risk.toUpperCase()}
       </span>
-      {#if verdict}
-        <span class={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${RISK_STYLES[verdict.risk]?.badge || ''}`}>
-          {verdictIsLoading ? 'ANALYZING…' : RISK_STYLES[verdict.risk]?.label || verdict.risk.toUpperCase()}
-        </span>
-      {/if}
-    </div>
-
-    <div class="flex items-center gap-2">
-      <button
-        onclick={clearEditor}
-        class="px-2.5 py-1.5 text-xs font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"
-      >
-        Clear
-      </button>
-      <button
-        disabled={isExecuting}
-        onclick={() => runQuery()}
-        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832L14.752 12.83a1 1 0 000-1.662z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-        Run Query
-      </button>
-    </div>
+    {/if}
+    <span class="ml-auto text-[10px] font-mono text-neutral-400 hidden md:inline">
+      <kbd class="px-1 rounded border border-[var(--ca-border)]">Ctrl</kbd>+<kbd class="px-1 rounded border border-[var(--ca-border)]">Enter</kbd> run · Tab indent
+    </span>
+    <button
+      onclick={clearEditor}
+      class="px-2.5 py-1 text-xs font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/70 dark:hover:bg-neutral-800 rounded-md transition-colors cursor-pointer"
+    >
+      Clear
+    </button>
+    <button
+      disabled={isExecuting}
+      onclick={() => runQuery()}
+      class="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-white bg-[var(--ca-brand)] hover:opacity-90 rounded-md transition-opacity disabled:opacity-50 cursor-pointer"
+      title="Run (Ctrl+Enter)"
+    >
+      <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+      Run
+    </button>
   </div>
 
-  <div class="flex-1 flex gap-4 overflow-hidden min-h-0">
-    <!-- Schema Sidebar -->
-    <aside class="w-56 bg-neutral-50 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl flex flex-col overflow-hidden shrink-0">
-      <div class="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900/80 text-[11px] font-bold text-neutral-500 uppercase tracking-wider">
-        Object Explorer
-      </div>
-      <div class="flex-1 overflow-y-auto p-2 space-y-0.5 text-xs">
-        {#each dbStore.tables as table (table.name)}
-          <button
-            onclick={async () => {
-              try {
-                // The backend quotes the table name for the active driver.
-                sqlQuery = (await dbStore.buildSelect({ table: table.name, limit: 50, with_total: false })) + ';';
-              } catch {
-                sqlQuery = `SELECT * FROM ${table.name} LIMIT 50;`;
-              }
-              selectedTab = 'results';
-              void refreshSafety(sqlQuery);
-            }}
-            class="w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition-colors font-medium"
-          >
-            <span class="flex items-center gap-1.5 truncate">
-              <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 10h18M3 14h18M9 6v12M15 6v12" />
-              </svg>
-              {table.name}
-            </span>
-            <span class="text-[10px] font-mono text-neutral-400">({table.row_count.toLocaleString()})</span>
-          </button>
-        {:else}
-          <div class="text-neutral-400 p-2 text-[11px]">No tables found for this database. Ensure the connection has seeded data or is correctly linked.</div>
-        {/each}
-      </div>
-      <div class="p-2 border-t border-neutral-200 dark:border-neutral-800">
-        <div class="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-1.5 px-1">Quick Snippets</div>
-        <div class="flex flex-col gap-1">
-          <button
-            class="text-left text-[11px] px-2 py-1 rounded font-mono bg-neutral-100 dark:bg-neutral-800/60 hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-            onclick={() => insertTemplate('SELECT count(*) AS total_rows, count(DISTINCT id) AS total_unique FROM users;')}
-          >
-            Count unique users
-          </button>
-          <button
-            class="text-left text-[11px] px-2 py-1 rounded font-mono bg-neutral-100 dark:bg-neutral-800/60 hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-            onclick={() => insertTemplate('EXPLAIN QUERY PLAN SELECT * FROM orders WHERE user_id = 42;')}
-          >
-            Explain query plan
-          </button>
-        </div>
-      </div>
-    </aside>
-
-    <!-- Main Content -->
-    <div class="flex-1 flex flex-col gap-4 min-w-0 overflow-y-auto">
+  <div class="flex-1 flex overflow-hidden min-h-0">
+    <div class="flex-1 flex flex-col min-w-0">
       <!-- Query Editor -->
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
-        <div class="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-800/40 flex justify-between items-center">
-          <span class="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">SQL Editor</span>
-          <span class="text-[10px] font-mono text-neutral-400">Ctrl+Enter to Execute · Tab Indent</span>
-        </div>
-        <textarea
-          bind:value={sqlQuery}
-          rows={6}
-          spellcheck="false"
-          onkeydown={handleTextareaKeydown}
-          class="w-full p-4 font-mono text-xs bg-transparent text-neutral-900 dark:text-neutral-100 focus:outline-none resize-none leading-relaxed"
-        ></textarea>
-      </div>
+      <textarea
+        bind:value={sqlQuery}
+        rows={8}
+        spellcheck="false"
+        onkeydown={handleTextareaKeydown}
+        aria-label="SQL editor"
+        class="w-full shrink-0 h-[34%] min-h-[110px] p-4 font-mono text-[13px] bg-white dark:bg-[#121214] text-neutral-900 dark:text-neutral-100 focus:outline-none resize-y leading-relaxed border-b border-[var(--ca-border)]"
+      ></textarea>
 
       <!-- Results -->
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl flex-1 min-h-[120px] flex flex-col">
-        <div class="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-neutral-50 dark:bg-neutral-800/40">
-          <span class="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">
-            {result ? `Results · ${result.rows_affected.toLocaleString()} row${result.rows_affected === 1 ? '' : 's'} · ${result.duration_ms} ms` : 'Results'}
-          </span>
-          <div class="flex items-center gap-2">
-            {#if result?.error}
-              <span class="text-rose-500 text-[10px] font-bold">ERROR</span>
-            {/if}
-            {#if result?.truncated}
-              <span
-                class="text-amber-600 dark:text-amber-400 text-[10px] font-bold"
-                title="The query returned more rows than the 10,000-row display cap. Add a LIMIT or a WHERE clause to see the rest."
-              >
-                FIRST {result.rows.length.toLocaleString()} ROWS ONLY
-              </span>
-            {/if}
-            {#if result && result.rows.length > 0}
-              <button
-                onclick={copyResults}
-                class="flex items-center gap-1 text-[10px] font-semibold text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors cursor-pointer"
-              >
-                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                Copy
-              </button>
-            {/if}
-          </div>
-        </div>
-
-        <div class="flex-1 overflow-auto">
-          {#if isExecuting}
-            <LoadingState message="Executing query..." />
-          {:else if result?.error}
-            <div class="p-4">
-              <div class="bg-rose-50 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400 p-3 rounded-lg text-xs font-mono">
-                {result.error}
-              </div>
+      <div class="flex-1 min-h-0 overflow-auto bg-white dark:bg-[#141416]">
+        {#if isExecuting}
+          <LoadingState message="Executing query..." />
+        {:else if result?.error}
+          <div class="p-4">
+            <div class="bg-rose-50 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400 p-3 rounded-lg text-xs font-mono whitespace-pre-wrap">
+              {result.error}
             </div>
-          {:else if result && result.columns.length > 0}
-            <table class="w-full text-left text-xs border-collapse">
-              <thead class="sticky top-0 bg-neutral-50 dark:bg-neutral-800 text-neutral-500 uppercase text-[10px] tracking-wider border-b border-neutral-200 dark:border-neutral-800 z-10">
-                <tr>
-                  <th class="py-2.5 px-3 font-semibold w-10 bg-neutral-50 dark:bg-neutral-800">#</th>
-                  {#each result.columns as col}
-                    <th class="py-2.5 px-3 font-semibold min-w-[120px]">{col}</th>
+          </div>
+        {:else if result && result.columns.length > 0}
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="sticky top-0 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 text-[11px] border-b border-[var(--ca-border)] z-10">
+              <tr>
+                <th class="py-1.5 px-2 font-semibold w-10 text-right text-neutral-400">#</th>
+                {#each result.columns as col}
+                  <th class="py-1.5 px-2.5 font-semibold min-w-[100px] border-l border-[var(--ca-border)]">{col}</th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each result.rows as row, i}
+                <tr
+                  class={`cursor-pointer ${selectedRowIndex === i ? 'bg-[var(--ca-brand-glow)]' : i % 2 ? 'bg-neutral-50/70 dark:bg-white/[0.02]' : ''} hover:bg-neutral-100 dark:hover:bg-white/[0.05]`}
+                  onclick={() => handleRowClick(row, i)}
+                >
+                  <td class="py-1 px-2 font-mono text-neutral-400 text-[10px] text-right select-none">{i + 1}</td>
+                  {#each row as val}
+                    <td class="py-1 px-2.5 font-mono text-[12px] text-neutral-700 dark:text-neutral-300 whitespace-nowrap max-w-[420px] truncate">
+                      {#if val === null}
+                        <span class="italic text-neutral-400">NULL</span>
+                      {:else}
+                        {typeof val === 'object' ? JSON.stringify(val) : String(val)}
+                      {/if}
+                    </td>
                   {/each}
                 </tr>
-              </thead>
-              <tbody class="divide-y divide-neutral-100 dark:divide-neutral-800/80">
-                {#each result.rows as row, i}
-                  <tr
-                    class={`transition-colors cursor-pointer ${selectedRowIndex === i ? 'bg-blue-500/10 hover:bg-blue-500/15' : 'hover:bg-neutral-50 dark:hover:bg-neutral-800/30'}`}
-                    onclick={() => handleRowClick(row, i)}
-                  >
-                    <td class="py-2 px-3 font-mono text-neutral-400 text-[10px] bg-neutral-50/50 dark:bg-neutral-800/20 text-right select-none">{i + 1}</td>
-                    {#each row as val}
-                      <td class="py-2 px-3 font-mono text-neutral-700 dark:text-neutral-300 whitespace-nowrap">
-                        {#if val === null}
-                          <span class="italic text-neutral-400">NULL</span>
-                        {:else}
-                          {String(val)}
-                        {/if}
-                      </td>
-                    {/each}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {:else}
-            <div class="h-full flex items-center justify-center text-neutral-400 text-xs">Run a query to see results here.</div>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <div class="h-full flex items-center justify-center text-neutral-400 text-xs">Run a query to see results here.</div>
+        {/if}
+      </div>
+
+      <!-- Status bar -->
+      <div class="h-8 px-3 flex items-center gap-3 border-t border-[var(--ca-border)] bg-neutral-50/80 dark:bg-neutral-900/70 text-[11px] text-neutral-500 shrink-0">
+        {#if result && !result.error}
+          <span>{result.rows.length.toLocaleString()} row{result.rows.length === 1 ? '' : 's'}</span>
+          {#if result.rows_affected && result.columns.length === 0}
+            <span>{result.rows_affected.toLocaleString()} affected</span>
           {/if}
-        </div>
+          <span>{result.duration_ms} ms</span>
+          {#if result.truncated}
+            <span
+              class="text-amber-600 dark:text-amber-400 font-semibold"
+              title="The query returned more rows than the 10,000-row display cap. Add a LIMIT or a WHERE clause to see the rest."
+            >
+              first {result.rows.length.toLocaleString()} rows only
+            </span>
+          {/if}
+        {:else if result?.error}
+          <span class="text-rose-500 font-semibold">Error</span>
+        {:else}
+          <span>Ready</span>
+        {/if}
+        <span class="ml-auto flex items-center gap-3">
+          {#if result && result.rows.length > 0}
+            <button onclick={copyResults} class="hover:text-neutral-900 dark:hover:text-white cursor-pointer">Copy</button>
+          {/if}
+          <button
+            onclick={() => (inspectorOpen = !inspectorOpen)}
+            class="hover:text-neutral-900 dark:hover:text-white cursor-pointer {inspectorOpen ? 'text-[var(--ca-brand)]' : ''}"
+          >
+            Row details
+          </button>
+        </span>
       </div>
     </div>
 
-    <!-- Row Details Inspector -->
-    <RowDetailsInspector
-      title="Row Details"
-      subtitle={sqlQuery ? `SELECT query · ${result?.rows.length ?? 0} rows` : 'No query'}
-      columns={result?.columns ?? []}
-      row={selectedRow}
-      rowIndex={selectedRowIndex >= 0 ? selectedRowIndex + 1 : 0}
-      isOpen={inspectorOpen}
-      onToggle={() => (inspectorOpen = true)}
-      onClose={closeInspector}
-    />
+    {#if inspectorOpen}
+      <RowDetailsInspector
+        title="Row Details"
+        subtitle={`${result?.rows.length ?? 0} rows`}
+        columns={result?.columns ?? []}
+        row={selectedRow}
+        rowIndex={selectedRowIndex >= 0 ? selectedRowIndex + 1 : 0}
+        isOpen={true}
+        onClose={closeInspector}
+      />
+    {/if}
   </div>
 
   <!-- Guardrail Confirmation Modal (non-dev environments) -->
