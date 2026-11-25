@@ -631,6 +631,32 @@ class DatabaseStore {
     return invoke<string>('session_build_select', { sessionId: sid, request: this.withSchema(request) });
   }
 
+  // ---- Databases on the active connection's server ------------------------------------------
+
+  /** True when the active connection's server holds several databases (PostgreSQL / MySQL). */
+  get supportsDatabases(): boolean {
+    return ['postgres', 'mysql', 'mariadb'].includes(this.activeConnection.driver);
+  }
+
+  /** Databases on the active connection's server (credentials stay in Rust). */
+  async listDatabases(): Promise<string[]> {
+    return invoke<string[]>('saved_list_databases', { connectionId: this.activeConnection.id });
+  }
+
+  /** Creates a database on the active connection's server; returns the final (normalised) name. */
+  async createDatabase(name: string): Promise<string> {
+    return invoke<string>('saved_create_database', { connectionId: this.activeConnection.id, name });
+  }
+
+  /** Points the active connection at another database (saved) and reconnects. */
+  async switchDatabase(database: string) {
+    if (database === this.activeConnection.database) return;
+    const next: ConnectionConfig = { ...this.activeConnection, database };
+    await invoke('save_connection', { config: next });
+    await this.loadConnections();
+    await this.connect(next);
+  }
+
   /** Browse requests target the active schema unless they name one. */
   private withSchema(request: BrowseRequest): BrowseRequest {
     return request.schema || !this.activeSchema ? request : { ...request, schema: this.activeSchema };

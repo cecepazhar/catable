@@ -90,6 +90,26 @@
             workspace.inspectorOpen = !workspace.inspectorOpen;
           },
         },
+        ...(dbStore.supportsDatabases
+          ? [
+              {
+                id: 'c:switch-db',
+                title: 'Switch database…',
+                kind: 'command' as Kind,
+                run: () => {
+                  window.dispatchEvent(new CustomEvent('catable:database-switcher', { detail: { create: false } }));
+                },
+              },
+              {
+                id: 'c:create-db',
+                title: 'Create database…',
+                kind: 'command' as Kind,
+                run: () => {
+                  window.dispatchEvent(new CustomEvent('catable:database-switcher', { detail: { create: true } }));
+                },
+              },
+            ]
+          : []),
         { id: 'c:erd', title: 'Schema diagram (ERD)', kind: 'go', run: () => goto('/schema-erd') },
         { id: 'c:reload-schema', title: 'Reload schema', kind: 'command', run: () => dbStore.loadTables(true) },
         {

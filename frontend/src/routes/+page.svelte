@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n/index.svelte';
   import {
@@ -323,6 +323,14 @@
     showSshPassword = false;
     activeTab = 'general';
     isModalOpen = true;
+    dbList = null;
+    dbListOpen = false;
+    // Visible feedback even when the form was already blank.
+    void tick().then(() => {
+      const el = document.getElementById('modal-name-input') as HTMLInputElement | null;
+      el?.focus();
+      el?.animate?.([{ boxShadow: '0 0 0 3px rgba(59,130,246,.55)' }, { boxShadow: '0 0 0 0 rgba(59,130,246,0)' }], { duration: 700 });
+    });
   }
 
   function editConn(c: ConnectionConfig) {
@@ -340,6 +348,76 @@
     showSshPassword = false;
     activeTab = 'general';
     isModalOpen = true;
+  }
+
+  /** A connection needs a label; when left empty, derive one instead of refusing to save. */
+  function ensureLabel() {
+    if (form.name.trim()) return;
+    const label = DRV_LABELS[form.driver] ?? form.driver;
+    if (isFileDriver(form.driver)) {
+      const file = cleanFilePath(form.database).split(/[\\/]/).pop() || 'database';
+      form.name = file.replace(/\.[^.]+$/, '') || label;
+    } else {
+      form.name = `${form.database || label} @ ${form.host || 'localhost'}`;
+    }
+  }
+
+  // ---- Database picker in the form: list / create on the server ----------------------------
+  let dbList = $state<string[] | null>(null);
+  let dbListOpen = $state(false);
+  let dbListLoading = $state(false);
+  let dbListError = $state<string | null>(null);
+  let dbCreating = $state(false);
+
+  /** The form as the backend expects it (no disabled tunnel, nothing saved). */
+  function formConfig(): ConnectionConfig {
+    return {
+      ...form,
+      id: form.id || 'unsaved',
+      name: form.name || 'unsaved',
+      ssh_tunnel: form.ssh_tunnel?.enabled ? form.ssh_tunnel : null,
+      group_name: form.group_name || null,
+    };
+  }
+
+  async function toggleDbList() {
+    dbListOpen = !dbListOpen;
+    if (dbListOpen) await loadDbList();
+  }
+
+  async function loadDbList() {
+    dbListLoading = true;
+    dbListError = null;
+    try {
+      dbList = await invoke<string[]>('server_list_databases', { config: formConfig() });
+    } catch (e) {
+      dbList = null;
+      dbListError = errorText(e) || 'Could not list databases.';
+    } finally {
+      dbListLoading = false;
+    }
+  }
+
+  const dbTyped = $derived(form.database.trim());
+  const dbTypedExists = $derived(!!dbList && dbList.some((d) => d === dbTyped));
+  const dbFiltered = $derived(
+    dbList ? dbList.filter((d) => !dbTyped || dbTypedExists || d.toLowerCase().includes(dbTyped.toLowerCase())) : []
+  );
+
+  async function createDbFromForm() {
+    if (!dbTyped || dbCreating) return;
+    dbCreating = true;
+    try {
+      const name = await invoke<string>('server_create_database', { config: formConfig(), name: dbTyped });
+      form.database = name;
+      showToast(`Database "${name}" created on ${form.host}.`, 'success');
+      await loadDbList();
+      dbListOpen = false;
+    } catch (e) {
+      showToast(errorText(e) || 'Could not create the database.', 'error');
+    } finally {
+      dbCreating = false;
+    }
   }
 
   function handleDriverChange(e: Event) {
@@ -437,10 +515,7 @@
   }
 
   async function handleSave() {
-    if (!form.name.trim()) {
-      showToast('Connection label is required.', 'error');
-      return;
-    }
+    ensureLabel();
     try {
       if (!form.id) {
         form.id = 'conn-' + Date.now();
@@ -471,10 +546,7 @@
   }
 
   async function handleSaveAndConnect() {
-    if (!form.name.trim()) {
-      showToast('Connection label is required.', 'error');
-      return;
-    }
+    ensureLabel();
     try {
       if (!form.id) {
         form.id = 'conn-' + Date.now();
@@ -1175,9 +1247,67 @@
                     id="modal-db-input"
                     type="text"
                     bind:value={form.database}
-                    placeholder={form.driver === 'redis' ? '0' : 'production_db'}
-                    class="w-full px-3 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white font-mono"
+                    placeholder={form.driver === 'redis' ? '0' : 'pick ▾ or type a new name'}
+                    class="w-full pl-3 pr-10 py-2 bg-neutral-50 dark:bg-neutral-800/90 border border-neutral-300 dark:border-neutral-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-900 dark:text-white font-mono"
                   />
+                  {#if form.driver !== 'redis'}
+                    <div class="relative">
+                      <button
+                        type="button"
+                        onclick={toggleDbList}
+                        class="absolute right-1 -top-[34px] h-7 px-2 rounded-md text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 cursor-pointer"
+                        title="List databases on this server, or create one"
+                        aria-expanded={dbListOpen}
+                      >
+                        {dbListLoading ? '…' : '▾'}
+                      </button>
+                      {#if dbListOpen}
+                        <button type="button" class="fixed inset-0 z-30 cursor-default" aria-label="Close database list" onclick={() => (dbListOpen = false)}></button>
+                        <div class="absolute left-0 right-0 top-1 z-40 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl overflow-hidden">
+                          <div class="px-3 py-1.5 flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 text-[10px] text-neutral-500">
+                            <span>Databases on {form.host}:{form.port}</span>
+                            <button type="button" class="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer" onclick={loadDbList}>Refresh</button>
+                          </div>
+                          {#if dbListLoading && !dbList}
+                            <div class="px-3 py-3 text-xs text-neutral-500">Connecting…</div>
+                          {:else if dbListError}
+                            <div class="px-3 py-3 text-xs text-rose-600 dark:text-rose-400 whitespace-pre-wrap">{dbListError}</div>
+                          {:else}
+                            <ul class="max-h-48 overflow-y-auto">
+                              {#each dbFiltered as d (d)}
+                                <li>
+                                  <button
+                                    type="button"
+                                    onclick={() => {
+                                      form.database = d;
+                                      dbListOpen = false;
+                                    }}
+                                    class="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-blue-500/10 cursor-pointer {d === dbTyped ? 'text-blue-600 dark:text-blue-400 font-semibold' : 'text-neutral-800 dark:text-neutral-200'}"
+                                  >
+                                    {d}
+                                  </button>
+                                </li>
+                              {:else}
+                                <li class="px-3 py-2 text-xs text-neutral-500">No matching database.</li>
+                              {/each}
+                            </ul>
+                          {/if}
+                          {#if !dbListError && dbTyped && !dbTypedExists}
+                            <button
+                              type="button"
+                              onclick={createDbFromForm}
+                              disabled={dbCreating}
+                              class="w-full text-left px-3 py-2 text-xs font-semibold border-t border-neutral-200 dark:border-neutral-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50 cursor-pointer"
+                            >
+                              {dbCreating ? 'Creating…' : `+ Create database "${dbTyped}"`}
+                            </button>
+                          {:else if !dbListError && !dbTyped}
+                            <div class="px-3 py-2 text-[11px] text-neutral-500 border-t border-neutral-200 dark:border-neutral-800">Type a new name in the field to create a database.</div>
+                          {/if}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
 
                 <div class="space-y-1.5">

@@ -107,6 +107,12 @@ pub fn run() {
             commands::svc_logs,
             commands::svc_reveal_data_dir,
             commands::svc_open_in_studio,
+            commands::svc_list_databases,
+            commands::svc_create_database,
+            commands::server_list_databases,
+            commands::server_create_database,
+            commands::saved_list_databases,
+            commands::saved_create_database,
             commands::svc_probe,
             commands::svc_test_connection
         ])

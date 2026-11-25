@@ -28,6 +28,8 @@
   import { getPro } from '$lib/stores/pro.svelte';
   import { dbStore, type ConnectionConfig } from '$lib/stores/database.svelte';
   import DatabaseIcon from '$lib/components/DatabaseIcon.svelte';
+  import DatabaseSwitcher from '$lib/components/DatabaseSwitcher.svelte';
+  import { runBoot } from '$lib/boot';
   import { goto } from '$app/navigation';
   import { errorText } from '$lib/errors';
 
@@ -198,14 +200,7 @@
 
   onMount(async () => {
     initTheme();
-    const boot = (window as any).__catableBoot;
-    boot?.step('Loading connections…', 55);
-    try {
-      await dbStore.loadConnections();
-      boot?.step('Ready', 95);
-    } finally {
-      boot?.done();
-    }
+    await runBoot(() => dbStore.loadConnections());
     getPendingCrashReport()
       .then((report) => {
         pendingCrashReport = report;
@@ -618,6 +613,11 @@
             Close
           </button>
         </div>
+        {#if dbStore.supportsDatabases && !isCollapsed}
+          <div class="mx-2.5 -mt-1 mb-2">
+            <DatabaseSwitcher />
+          </div>
+        {/if}
 
         <!-- Workspace nav: compact icon row -->
         <div class="px-2.5 pb-2 flex items-center gap-1 {isCollapsed ? 'flex-col px-1.5' : ''}">

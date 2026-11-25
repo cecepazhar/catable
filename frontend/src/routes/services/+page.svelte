@@ -306,18 +306,83 @@
     }
   }
 
-  async function openInStudio(s: DbService) {
+  /** Saves a vault connection for the service (+ database) and opens it in the studio. */
+  async function openInStudio(s: DbService, database?: string) {
     if (s.state !== 'running') {
       showToast('Start the service first', 'info');
       return;
     }
+    openingDb = database ?? '(default)';
     try {
-      const conn = await invoke<ConnectionConfig>('svc_open_in_studio', { serviceId: s.id });
+      const conn = await invoke<ConnectionConfig>('svc_open_in_studio', { serviceId: s.id, database: database ?? null });
+      await dbStore.loadConnections(); // it now shows up under Connections too
       await dbStore.connect(conn);
-      showToast(`Connected to ${s.name}`, 'success');
+      showToast(`Connected to ${conn.name}`, 'success');
       void goto(s.engine === 'redis' ? '/sql-studio' : '/table-browser');
     } catch (e) {
       showToast(`Could not connect: ${firstLine(errorText(e))}`, 'error');
+    } finally {
+      openingDb = null;
+    }
+  }
+
+  // ---- Easy connect: databases of the selected service ------------------------------------------
+  let databases = $state<Record<string, string[]>>({});
+  let dbError = $state<string | null>(null);
+  let dbLoading = $state(false);
+  let newDbName = $state('');
+  let creatingDb = $state(false);
+  let openingDb = $state<string | null>(null);
+  let dbFilter = $state('');
+
+  async function loadDatabases(s: DbService) {
+    if (s.engine === 'redis' || s.state !== 'running') return;
+    dbLoading = true;
+    dbError = null;
+    try {
+      databases[s.id] = await invoke<string[]>('svc_list_databases', { serviceId: s.id });
+    } catch (e) {
+      dbError = firstLine(errorText(e));
+    } finally {
+      dbLoading = false;
+    }
+  }
+
+  // Load the list whenever a running service is selected (or comes up).
+  let dbLoadedFor = '';
+  $effect(() => {
+    const s = selected;
+    const key = s && s.state === 'running' ? `${s.id}:${s.port}` : '';
+    if (key && key !== dbLoadedFor) {
+      dbLoadedFor = key;
+      dbFilter = '';
+      void loadDatabases(s!);
+    } else if (!key) {
+      dbLoadedFor = '';
+    }
+  });
+
+  const dbSuggestion = $derived(
+    newDbName
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+  );
+
+  async function createDatabase(s: DbService, openAfter: boolean) {
+    if (!newDbName.trim() || creatingDb) return;
+    creatingDb = true;
+    try {
+      const name = await invoke<string>('svc_create_database', { serviceId: s.id, name: newDbName });
+      newDbName = '';
+      showToast(`Database "${name}" created`, 'success');
+      await loadDatabases(s);
+      if (openAfter) await openInStudio(s, name);
+    } catch (e) {
+      showToast(firstLine(errorText(e)), 'error');
+    } finally {
+      creatingDb = false;
     }
   }
 
@@ -625,6 +690,86 @@
                 </dd>
               </dl>
             </div>
+
+            <!-- Easy connect: pick or create a database, then open it in the studio -->
+            {#if s.engine !== 'redis'}
+              {@const list = (databases[s.id] ?? []).filter((d) => !dbFilter || d.toLowerCase().includes(dbFilter.toLowerCase()))}
+              <div class="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900/60 overflow-hidden">
+                <div class="px-4 py-2.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2">
+                  <span class="text-[11px] font-bold uppercase tracking-wider text-neutral-500">Databases</span>
+                  {#if databases[s.id]}
+                    <span class="text-[10px] font-mono px-1.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-500">{databases[s.id].length}</span>
+                  {/if}
+                  <span class="ml-auto"></span>
+                  {#if s.state === 'running' && (databases[s.id]?.length ?? 0) > 6}
+                    <input bind:value={dbFilter} placeholder="Filter…" aria-label="Filter databases" class="field !h-7 !py-0 w-36 text-xs" />
+                  {/if}
+                  {#if s.state === 'running'}
+                    <button type="button" class="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50" onclick={() => loadDatabases(s)} disabled={dbLoading}>{dbLoading ? 'Loading…' : 'Refresh'}</button>
+                  {/if}
+                </div>
+
+                {#if s.state !== 'running'}
+                  <div class="px-4 py-5 text-xs text-neutral-500 flex items-center gap-3">
+                    <span>Start the service to pick or create a database.</span>
+                  </div>
+                {:else}
+                  <!-- Create -->
+                  <form
+                    class="px-4 py-3 flex flex-wrap items-center gap-2 border-b border-neutral-100 dark:border-neutral-800/70"
+                    onsubmit={(e) => {
+                      e.preventDefault();
+                      void createDatabase(s, true);
+                    }}
+                  >
+                    <input
+                      bind:value={newDbName}
+                      placeholder="new_database_name"
+                      aria-label="New database name"
+                      class="field flex-1 min-w-[180px] font-mono"
+                      disabled={creatingDb}
+                    />
+                    <button type="button" class="btn-secondary" disabled={!newDbName.trim() || creatingDb} onclick={() => createDatabase(s, false)}>Create</button>
+                    <button type="submit" class="btn-primary bg-blue-600 hover:bg-blue-500" disabled={!newDbName.trim() || creatingDb}>
+                      {creatingDb ? 'Creating…' : 'Create & Open'}
+                    </button>
+                    {#if dbSuggestion && dbSuggestion !== newDbName.trim()}
+                      <span class="w-full text-[11px] text-neutral-500">Will be created as <span class="font-mono text-neutral-700 dark:text-neutral-300">{dbSuggestion}</span></span>
+                    {/if}
+                  </form>
+
+                  <!-- Pick -->
+                  {#if dbError}
+                    <div class="px-4 py-3 text-xs text-rose-600 dark:text-rose-400">{dbError}</div>
+                  {:else if !databases[s.id] && dbLoading}
+                    <div class="px-4 py-3 text-xs text-neutral-500">Loading databases…</div>
+                  {:else if list.length === 0}
+                    <div class="px-4 py-3 text-xs text-neutral-500">{dbFilter ? 'No database matches.' : 'No databases yet — create one above.'}</div>
+                  {:else}
+                    <ul class="max-h-64 overflow-y-auto scrollbar-thin">
+                      {#each list as db (db)}
+                        {@const isDefault = db === (s.database || (s.engine === 'postgres' ? 'postgres' : ''))}
+                        <li class="group flex items-center gap-2.5 px-4 py-2 border-b last:border-b-0 border-neutral-100 dark:border-neutral-800/70 hover:bg-neutral-50 dark:hover:bg-neutral-800/40">
+                          <svg class="w-3.5 h-3.5 text-sky-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><ellipse cx="12" cy="5" rx="8" ry="3" stroke-width="2" /><path stroke-width="2" d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" /></svg>
+                          <button type="button" class="font-mono text-xs text-neutral-800 dark:text-neutral-200 truncate text-left hover:underline" ondblclick={() => openInStudio(s, db)} onclick={() => copy(db, 'Database name copied')} title="Click to copy · double-click to open">{db}</button>
+                          {#if isDefault}
+                            <span class="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">default</span>
+                          {/if}
+                          <button
+                            type="button"
+                            class="ml-auto px-2.5 py-1 text-[11px] font-semibold rounded-md text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 disabled:opacity-50"
+                            onclick={() => openInStudio(s, db)}
+                            disabled={openingDb !== null}
+                          >
+                            {openingDb === db ? 'Opening…' : 'Open →'}
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
 
             <!-- Settings card -->
             <div class="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900/60 overflow-hidden">

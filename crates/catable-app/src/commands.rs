@@ -981,23 +981,30 @@ pub async fn svc_reveal_data_dir(service_id: String) -> Result<(), String> {
     .await
 }
 
-#[tauri::command]
-pub async fn svc_open_in_studio(service_id: String) -> Result<ConnectionConfig, String> {
-    let s = blocking(move || svc::get(&service_id).map_err(|e| e.to_string())).await?;
-    let (driver, database) = match s.engine {
-        EngineType::Postgres => (DriverKind::Postgres, if s.database.is_empty() { "postgres".to_string() } else { s.database.clone() }),
-        EngineType::Mysql => (DriverKind::Mysql, s.database.clone()),
-        EngineType::Mariadb => (DriverKind::MariaDb, s.database.clone()),
-        EngineType::Redis => (DriverKind::Redis, "0".to_string()),
+/// Connection settings CATable Studio uses for a local service and one of its databases.
+fn service_connection(s: &DbService, database: Option<&str>) -> ConnectionConfig {
+    let default_db = match s.engine {
+        EngineType::Postgres if s.database.is_empty() => "postgres".to_string(),
+        EngineType::Redis => "0".to_string(),
+        _ => s.database.clone(),
     };
-    Ok(ConnectionConfig {
-        id: format!("svc-{}", s.id),
-        name: s.name.clone(),
+    let db = database.map(str::trim).filter(|d| !d.is_empty()).map(str::to_string).unwrap_or(default_db.clone());
+    let driver = match s.engine {
+        EngineType::Postgres => DriverKind::Postgres,
+        EngineType::Mysql => DriverKind::Mysql,
+        EngineType::Mariadb => DriverKind::MariaDb,
+        EngineType::Redis => DriverKind::Redis,
+    };
+    let name = if db == default_db { s.name.clone() } else { format!("{} · {}", s.name, db) };
+    ConnectionConfig {
+        // One saved connection per service + database, so reopening updates it instead of piling up.
+        id: format!("svc-{}-{}", s.id, db),
+        name,
         driver,
         environment: Environment::Development,
         host: "127.0.0.1".into(),
         port: s.port,
-        database,
+        database: db,
         user: s.default_user().to_string(),
         password: None,
         read_only: false,
@@ -1005,9 +1012,151 @@ pub async fn svc_open_in_studio(service_id: String) -> Result<ConnectionConfig, 
         group_name: Some("Local Services".into()),
         workspace_id: None,
         connect_timeout_secs: Some(5),
-    })
+    }
 }
 
+async fn running_service(service_id: String) -> Result<DbService, String> {
+    let s = blocking(move || svc::get(&service_id).map_err(|e| e.to_string())).await?;
+    if !svc::is_port_open(s.port, std::time::Duration::from_millis(300)) {
+        return Err(format!("{} is not running. Start it first.", s.name));
+    }
+    Ok(s)
+}
+
+/// Saves (or refreshes) the vault connection for a service database and returns it, ready for
+/// `dbStore.connect`. Sessions look connections up in the vault, so it must be stored first.
+#[tauri::command]
+pub async fn svc_open_in_studio(
+    state: tauri::State<'_, AppState>,
+    service_id: String,
+    database: Option<String>,
+) -> Result<ConnectionConfig, String> {
+    let s = blocking(move || svc::get(&service_id).map_err(|e| e.to_string())).await?;
+    let cfg = service_connection(&s, database.as_deref());
+    let vault = state.vault.as_ref().map_err(|e| e.clone())?;
+    vault.save_connection(&cfg).map_err(|e| e.to_string())?;
+    Ok(cfg)
+}
+
+const SYSTEM_DATABASES: &[&str] = &["information_schema", "mysql", "performance_schema", "sys"];
+
+/// The same server, pointed at a database every user can reach for catalog work.
+fn admin_variant(cfg: &ConnectionConfig) -> ConnectionConfig {
+    let database = match cfg.driver {
+        DriverKind::Postgres => "postgres".to_string(),
+        DriverKind::Mysql | DriverKind::MariaDb => String::new(),
+        _ => cfg.database.clone(),
+    };
+    ConnectionConfig { database, ..cfg.clone() }
+}
+
+/// Runs a catalog statement on the admin database, falling back to the configured one
+/// (some hosted PostgreSQL users may not connect to `postgres`).
+async fn run_admin(cfg: &ConnectionConfig, sql: &str) -> Result<QueryResult, String> {
+    let first = QueryExecutor::execute_query_async(&admin_variant(cfg), sql).await;
+    let res = match &first.error {
+        Some(e) if cfg.driver == DriverKind::Postgres && !cfg.database.is_empty() && e.contains("does not exist") => {
+            QueryExecutor::execute_query_async(cfg, sql).await
+        }
+        _ => first,
+    };
+    match res.error {
+        Some(e) => Err(e),
+        None => Ok(res),
+    }
+}
+
+/// User databases on the server a connection points at (system databases left out).
+async fn list_databases_for(cfg: &ConnectionConfig) -> Result<Vec<String>, String> {
+    let sql = match cfg.driver {
+        DriverKind::Postgres => {
+            "SELECT datname FROM pg_database WHERE NOT datistemplate AND datallowconn ORDER BY datname"
+        }
+        DriverKind::Mysql | DriverKind::MariaDb => "SHOW DATABASES",
+        DriverKind::Redis => return Ok((0..16).map(|i| i.to_string()).collect()),
+        _ => return Err("This is a file-based database: pick or type a file instead.".into()),
+    };
+    let res = run_admin(cfg, sql).await?;
+    Ok(res
+        .rows
+        .iter()
+        .filter_map(|r| r.first().and_then(|v| v.as_str()).map(str::to_string))
+        .filter(|n| !SYSTEM_DATABASES.contains(&n.as_str()))
+        .collect())
+}
+
+/// Creates a database on the server a connection points at. The name is normalised to
+/// lowercase snake_case (letters, digits, `_`), so it never needs quoting tricks.
+async fn create_database_for(cfg: &ConnectionConfig, name: &str) -> Result<String, String> {
+    if cfg.read_only {
+        return Err("This connection is read-only.".into());
+    }
+    if name.trim().is_empty() {
+        return Err("Database name is required".into());
+    }
+    let db = svc::sanitize_db_name(name);
+    let sql = match cfg.driver {
+        DriverKind::Postgres => format!("CREATE DATABASE \"{db}\""),
+        DriverKind::Mysql | DriverKind::MariaDb => format!("CREATE DATABASE `{db}`"),
+        DriverKind::Redis => return Err("Redis has numbered databases (0–15); there is nothing to create.".into()),
+        _ => return Err("For SQLite / DuckDB, type a new file name — it is created on first connect.".into()),
+    };
+    match run_admin(cfg, &sql).await {
+        Ok(_) => Ok(db),
+        Err(e) if e.contains("already exists") || e.contains("database exists") => {
+            Err(format!("A database named \"{db}\" already exists"))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Databases on the server of a connection being edited (form values, not yet saved).
+#[tauri::command]
+pub async fn server_list_databases(config: ConnectionConfig) -> Result<Vec<String>, String> {
+    list_databases_for(&config).await
+}
+
+#[tauri::command]
+pub async fn server_create_database(config: ConnectionConfig, name: String) -> Result<String, String> {
+    create_database_for(&config, &name).await
+}
+
+/// Same, for a saved connection: credentials stay in Rust (read from the vault).
+#[tauri::command]
+pub async fn saved_list_databases(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> Result<Vec<String>, String> {
+    let cfg = resolve_connection(&state, &connection_id)?;
+    list_databases_for(&cfg).await
+}
+
+#[tauri::command]
+pub async fn saved_create_database(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    name: String,
+) -> Result<String, String> {
+    let cfg = resolve_connection(&state, &connection_id)?;
+    create_database_for(&cfg, &name).await
+}
+
+/// User databases on a running service.
+#[tauri::command]
+pub async fn svc_list_databases(service_id: String) -> Result<Vec<String>, String> {
+    let s = running_service(service_id).await?;
+    list_databases_for(&service_connection(&s, None)).await
+}
+
+/// Creates a database on a running service.
+#[tauri::command]
+pub async fn svc_create_database(service_id: String, name: String) -> Result<String, String> {
+    let s = running_service(service_id).await?;
+    if s.engine == EngineType::Redis {
+        return Err("Redis has numbered databases (0–15); there is nothing to create.".into());
+    }
+    create_database_for(&service_connection(&s, None), &name).await
+}
 #[tauri::command]
 pub async fn svc_probe(service_id: String) -> Result<ProbeResult, String> {
     blocking(move || {
