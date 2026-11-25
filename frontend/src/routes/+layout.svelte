@@ -281,7 +281,7 @@
     
     <!-- Desktop Sidebar (Antares / TablePlus Dynamic Mode) -->
     <aside
-      class="hidden md:flex flex-col shrink-0 bg-transparent {isCollapsed ? 'w-14' : 'w-60'} transition-all duration-150"
+      class="hidden md:flex flex-col shrink-0 bg-transparent {isCollapsed ? 'w-14' : 'w-60'} transition-[width] duration-200 ease-out will-change-[width]"
       aria-label="Sidebar Navigasi Database"
     >
       {#if !dbStore.isConnected}
@@ -528,7 +528,11 @@
 
       <main class="flex-1 min-w-0 flex overflow-hidden relative z-10 bg-white dark:bg-[#161616] {cardBorderClass} rounded-tl-2xl transition-colors duration-150">
         <div class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden text-neutral-900 dark:text-neutral-100 relative px-4 py-6 md:px-8 md:py-8 bg-[linear-gradient(to_right,#0000000a_1px,transparent_1px),linear-gradient(to_bottom,#0000000a_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:56px_56px] z-20">
-          {@render children()}
+          {#key page.url.pathname}
+            <div class="route-view h-full">
+              {@render children()}
+            </div>
+          {/key}
         </div>
 
         {#if aiChat.open}

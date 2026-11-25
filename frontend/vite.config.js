@@ -33,6 +33,10 @@ export default defineConfig(() => ({
     },
   },
   build: {
-    target: ["chrome61", "es2018"],
+    // WebView2 (Chromium) is evergreen — ship modern, smaller, faster JS.
+    target: ["chrome120", "es2022"],
+    cssCodeSplit: true,
+    reportCompressedSize: false,
+    chunkSizeWarningLimit: 1500,
   },
 }));

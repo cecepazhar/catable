@@ -20,15 +20,16 @@ export interface AmbientConfig {
   cardGlowStyle: CardGlowStyle;
 }
 
-const STORAGE_KEY = 'catable-ambient-lighting-v1';
+// v2: calmer, GPU-friendly defaults (static glow, no infinite animation).
+const STORAGE_KEY = 'catable-ambient-lighting-v2';
 
 const DEFAULT_CONFIG: AmbientConfig = {
   enabled: true,
   mode: 'app-accent',
   customColor: '#64748b',
-  effect: 'breathing',
-  intensity: 0.65,
-  blurRadius: 20,
+  effect: 'static',
+  intensity: 0.35,
+  blurRadius: 14,
   speedSec: 4,
   avatarGlowEnabled: true,
   avatarGlowEffect: 'comet-beam',

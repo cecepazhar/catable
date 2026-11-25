@@ -1,23 +1,25 @@
-//! DB Service Engine Manager — native local database server supervision.
+//! DB Service Engine Manager — DBngin-style local database servers.
 //!
-//! Implements CATable's DBNGIN-style service catalog, dynamic port allocation,
-//! binary provisioning (auto-download + SHA256), process launch/stop, and health monitoring.
-//! Cross-platform: Linux, macOS, Windows.
-//!
-//! See task-db-service-engine.md in Obsidian Vault for full roadmap.
+//! Catalog of portable engine builds, per-service data dirs, streamed
+//! download + extraction with progress, process launch/stop without console
+//! windows, readiness probing, state reconciliation and auto-start.
 
 mod catalog;
-#[cfg(not(windows))]
 mod download;
 mod launcher;
 mod monitor;
 mod port;
 mod service;
 
-pub use catalog::{AVAILABLE_VERSIONS, DbService, EngineType, ServiceCatalog, ServiceState};
-#[cfg(not(windows))]
-pub use download::{download_service, ServiceProvisionResult, ServiceVersion, TargetOs};
-pub use launcher::{launch_service, LaunchResult, StopResult};
-pub use monitor::{probe_detail, probe_service, ProbeResult, ProbeState};
-pub use port::find_free_port;
-pub use service::{create_and_start, create_service, get, list, remove, stop};
+pub use catalog::{
+    find_release, sanitize_db_name, DbService, EngineRelease, EngineType, ServiceCatalog,
+    ServiceState, RELEASES,
+};
+pub use download::{find_exe, ServiceProgress};
+pub use launcher::{LaunchResult, StopResult};
+pub use monitor::{is_port_open, probe_detail, probe_service, ProbeResult, ProbeState};
+pub use port::{find_free_port, port_is_free};
+pub use service::{
+    autostart, create_service, engine_versions, get, list, logs, remove, restart, start, stop,
+    stop_all, suggest_port, update, EngineVersionInfo,
+};

@@ -1,267 +1,216 @@
-// Auto-download & SHA256 provisioning of portable database engine binaries
-// Per-OS: Windows -> zip, Linux/macOS -> tar.gz
-// (Phase 2 — CAT-SVC-005/006/007)
+// Engine provisioning: streamed HTTPS download with progress + safe zip extraction.
+// One shared install per engine+version under `db-engines/engines/<slug>-<ver>`.
 
 use crate::error::CatableError;
-use std::path::Path;
+use crate::service::catalog::EngineRelease;
+use parking_lot::Mutex;
+use serde::Serialize;
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TargetOs {
-    Linux,
-    Macos,
-    Windows,
+/// Progress event reported to the UI during long-running service operations.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceProgress {
+    /// download | extract | init | start | stop | ready | error
+    pub phase: &'static str,
+    pub done: u64,
+    pub total: u64,
+    pub message: String,
 }
 
-impl TargetOs {
-    pub fn current() -> Self {
-        if cfg!(target_os = "windows") {
-            Self::Windows
-        } else if cfg!(target_os = "macos") {
-            Self::Macos
-        } else {
-            Self::Linux
-        }
-    }
-
-    pub fn archive_ext(&self) -> &'static str {
-        match self {
-            Self::Windows => "zip",
-            Self::Linux | Self::Macos => "tar.gz",
-        }
+impl ServiceProgress {
+    pub fn msg(phase: &'static str, message: impl Into<String>) -> Self {
+        Self { phase, done: 0, total: 0, message: message.into() }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ServiceVersion {
-    pub engine: crate::service::EngineType,
-    pub version: String,
-    /// SHA-256 (hex, 64 chars) of the downloaded archive. Verified before extraction.
-    pub sha256: String,
-    /// Base download URL (e.g. https://packages.fathforce.com/catable-engines/...)
-    pub url: String,
+pub type ProgressFn<'a> = &'a mut dyn FnMut(ServiceProgress);
+
+const MARKER: &str = ".catable-installed";
+
+/// Serializes installs so two services never extract the same engine at once.
+static INSTALL_LOCK: Mutex<()> = parking_lot::const_mutex(());
+
+pub fn is_installed(install_dir: &Path) -> bool {
+    install_dir.join(MARKER).exists()
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ServiceProvisionResult {
-    pub bin_dir: std::path::PathBuf,
-    pub data_dir: std::path::PathBuf,
-    pub initialized: bool,
+/// Skip bulky, unused parts of vendor archives (GUI tools, docs, debug symbols).
+fn skip_entry(rel: &Path) -> bool {
+    let s = rel.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    const SKIP_DIRS: &[&str] = &["pgadmin 4/", "stackbuilder/", "/doc/", "/docs/", "/include/", "/symbols/", "/mysql-test/", "/sql-bench/"];
+    if SKIP_DIRS.iter().any(|d| s.contains(d) || s.starts_with(d.trim_start_matches('/'))) {
+        return true;
+    }
+    s.ends_with(".pdb") || s.ends_with(".lib") && s.contains("/lib/") && !s.contains("plugin")
 }
 
-/// Download, verify (SHA-256), extract and init the engine binaries into `bin_dir`.
-///
-/// # Security (Zero-Knowledge / Sovereign CA ethos)
-/// - Every engine archive MUST carry a known-good SHA-256; mismatch aborts immediately.
-/// - Binaries are placed under the user's `db-engines/` tree and never touch /usr.
-/// - No vendor telemetry.
-pub fn download_service(
-    v: &ServiceVersion,
-    bin_dir: &Path,
-    data_dir: &Path,
-) -> Result<ServiceProvisionResult, CatableError> {
-    use std::io::Read;
-
-    std::fs::create_dir_all(bin_dir)
-        .map_err(|e| CatableError::Io(format!("bin_dir: {}", e)))?;
-    std::fs::create_dir_all(data_dir)
-        .map_err(|e| CatableError::Io(format!("data_dir: {}", e)))?;
-
-    let archive_name = format!("engine-{}-{}.{}", v.engine, v.version, v.engine_archive_name());
-    let archive_path = bin_dir.join(&archive_name);
-
-    // 1) Download via ureq v3 Agent — read whole body into bytes
-    let agent = ureq::Agent::new_with_defaults();
-    let response = agent
-        .get(&v.url)
-        .call()
-        .map_err(|e| CatableError::Io(format!("download {} failed: {}", v.url, e)))?;
-    let mut bytes: Vec<u8> = Vec::new();
-    response
-        .into_body()
-        .as_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|e| CatableError::Io(format!("read body {}: {}", v.url, e)))?;
-
-    // 2) SHA-256 verify
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let digest = hasher.finalize();
-    let got: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
-    if !got.eq_ignore_ascii_case(v.sha256.trim()) {
-        return Err(CatableError::Io(format!(
-            "SHA-256 mismatch for {}: expected {} got {}",
-            archive_name, v.sha256, got
-        )));
+/// Ensure the engine binaries exist in `install_dir`, downloading if needed.
+pub fn ensure_installed(
+    rel: &EngineRelease,
+    install_dir: &Path,
+    progress: ProgressFn<'_>,
+) -> Result<(), CatableError> {
+    if is_installed(install_dir) {
+        return Ok(());
+    }
+    if !cfg!(windows) {
+        return Err(CatableError::Io(
+            "Automatic engine provisioning is currently available on Windows only".into(),
+        ));
+    }
+    let _g = INSTALL_LOCK.lock();
+    if is_installed(install_dir) {
+        return Ok(());
     }
 
-    // 3) Write archive + extract
-    let archive_path = bin_dir.join(&archive_name);
-    std::fs::write(&archive_path, &bytes)
-        .map_err(|e| CatableError::Io(format!("write archive: {}", e)))?;
-    extract(&archive_path, bin_dir, v)?;
-
-    // 4) init
-    let initialized = init_engine(v, bin_dir, data_dir)?;
-
-    Ok(ServiceProvisionResult {
-        bin_dir: bin_dir.to_path_buf(),
-        data_dir: data_dir.to_path_buf(),
-        initialized,
-    })
-}
-
-fn extract(archive: &Path, dest: &Path, v: &ServiceVersion) -> Result<(), CatableError> {
-    use std::fs::File;
-    use std::io::Read;
-
-    let file = File::open(archive).map_err(|e| CatableError::Io(e.to_string()))?;
-    let is_zip = archive
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.eq_ignore_ascii_case("zip"))
-        .unwrap_or(false);
-
-    if is_zip {
-        let mut zip = zip::ZipArchive::new(file)
-            .map_err(|e| CatableError::Io(format!("bad zip: {}", e)))?;
-        for i in 0..zip.len() {
-            let mut entry = zip.by_index(i).map_err(|e| CatableError::Io(e.to_string()))?;
-            let name = entry.name().to_string();
-            // Zip-slip guard
-            if name.starts_with("..") || name.starts_with('/') {
-                continue;
-            }
-            let out_path = dest.join(&name);
-            if entry.is_dir() {
-                std::fs::create_dir_all(out_path).ok();
-            } else {
-                if let Some(parent) = out_path.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                let mut buf = Vec::new();
-                entry.read_to_end(&mut buf).ok();
-                std::fs::write(&out_path, buf).map_err(|e| CatableError::Io(e.to_string()))?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let perms = std::fs::Permissions::from_mode(0o755);
-                    std::fs::set_permissions(&out_path, perms).ok();
-                }
-            }
-        }
-    } else {
-        let gz = flate2::read::GzDecoder::new(file);
-        let mut tar = tar::Archive::new(gz);
-        let mut entries = tar
-            .entries()
-            .map_err(|e| CatableError::Io(e.to_string()))?;
-        while let Some(result) = entries.next() {
-            let mut entry = result.map_err(|e| CatableError::Io(format!("tar read entry: {}", e)))?;
-            let name = entry.path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-            if name.is_empty() || name.starts_with("..") {
-                continue;
-            }
-            let out_path = dest.join(&name);
-            if entry.header().entry_type().is_dir() {
-                std::fs::create_dir_all(&out_path).ok();
-            } else {
-                if let Some(parent) = out_path.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                entry
-                    .unpack(&out_path)
-                    .map_err(|e| CatableError::Io(format!("tar unpack: {}", e)))?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if !name.ends_with('/') && !name.contains(".conf") {
-                        std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755)).ok();
-                    }
-                }
-            }
-        }
+    let parent = install_dir
+        .parent()
+        .ok_or_else(|| CatableError::Io("invalid install dir".into()))?;
+    std::fs::create_dir_all(parent).map_err(|e| CatableError::Io(e.to_string()))?;
+    if install_dir.exists() {
+        let _ = std::fs::remove_dir_all(install_dir);
     }
-    let _ = v; // v is for context
+    let file_name = install_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "engine".into());
+    let archive = parent.join(format!("{file_name}.zip.part"));
+
+    download(rel, &archive, &mut *progress)?;
+    let res = extract_zip(&archive, install_dir, &mut *progress);
+    let _ = std::fs::remove_file(&archive);
+    if let Err(e) = res {
+        let _ = std::fs::remove_dir_all(install_dir);
+        return Err(e);
+    }
+    std::fs::write(install_dir.join(MARKER), rel.url).map_err(|e| CatableError::Io(e.to_string()))?;
     Ok(())
 }
 
-fn init_engine(v: &ServiceVersion, bin_dir: &Path, data_dir: &Path) -> Result<bool, CatableError> {
-    use std::process::Command;
+fn download(rel: &EngineRelease, dest: &Path, progress: ProgressFn<'_>) -> Result<(), CatableError> {
+    progress(ServiceProgress::msg("download", format!("Connecting to {}", host_of(rel.url))));
+    let resp = ureq::get(rel.url)
+        .header("User-Agent", concat!("CATable/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|e| CatableError::Io(format!("Download failed ({}): {e}", host_of(rel.url))))?;
 
-    let marker = data_dir.join(".catable_initialized");
-    if marker.exists() {
-        return Ok(true);
+    let total = resp
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(rel.size_bytes);
+
+    let mut body = resp.into_body();
+    let mut reader = body.as_reader();
+    let file = std::fs::File::create(dest).map_err(|e| CatableError::Io(e.to_string()))?;
+    let mut out = BufWriter::with_capacity(1 << 20, file);
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut done: u64 = 0;
+    let mut last = Instant::now() - Duration::from_secs(1);
+
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| CatableError::Io(format!("Download interrupted: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n]).map_err(|e| CatableError::Io(e.to_string()))?;
+        done += n as u64;
+        if last.elapsed() >= Duration::from_millis(150) {
+            last = Instant::now();
+            progress(ServiceProgress {
+                phase: "download",
+                done,
+                total,
+                message: format!("Downloading {} {}", rel.engine, rel.version),
+            });
+        }
     }
+    out.flush().map_err(|e| CatableError::Io(e.to_string()))?;
+    progress(ServiceProgress { phase: "download", done, total: done.max(total), message: "Download complete".into() });
+    Ok(())
+}
 
-    let mut ok = false;
-    match v.engine {
-        crate::service::EngineType::Postgres => {
-            let initdb = bin_dir.join("initdb");
-            if initdb.exists() {
-                let out = Command::new(&initdb)
-                    .args(["-D", &data_dir.to_string_lossy(), "-U", "catable", "--auth=trust"])
-                    .output();
-                match out {
-                    Ok(o) if o.status.success() => {
-                        std::fs::write(&marker, "1").ok();
-                        ok = true;
-                    }
-                    Ok(o) => return Err(CatableError::Io(format!(
-                        "initdb failed: {}",
-                        String::from_utf8_lossy(&o.stderr)
-                    ))),
-                    Err(e) => return Err(CatableError::Io(format!("initdb spawn: {}", e))),
+fn host_of(url: &str) -> &str {
+    url.trim_start_matches("https://").split('/').next().unwrap_or(url)
+}
+
+fn extract_zip(archive: &Path, dest: &Path, progress: ProgressFn<'_>) -> Result<(), CatableError> {
+    let file = std::fs::File::open(archive).map_err(|e| CatableError::Io(e.to_string()))?;
+    let mut zip = zip::ZipArchive::new(BufReader::with_capacity(1 << 20, file))
+        .map_err(|e| CatableError::Io(format!("Corrupt archive: {e}")))?;
+    let total = zip.len() as u64;
+    std::fs::create_dir_all(dest).map_err(|e| CatableError::Io(e.to_string()))?;
+    let mut last = Instant::now() - Duration::from_secs(1);
+
+    for i in 0..zip.len() {
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| CatableError::Io(format!("Corrupt archive entry: {e}")))?;
+        // Zip-slip guard: only accept paths that stay inside `dest`.
+        let Some(rel): Option<PathBuf> = entry.enclosed_name().map(|p| p.to_path_buf()) else {
+            continue;
+        };
+        if skip_entry(&rel) {
+            continue;
+        }
+        let out_path = dest.join(&rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| CatableError::Io(e.to_string()))?;
+        } else {
+            if let Some(p) = out_path.parent() {
+                std::fs::create_dir_all(p).map_err(|e| CatableError::Io(e.to_string()))?;
+            }
+            let f = std::fs::File::create(&out_path)
+                .map_err(|e| CatableError::Io(format!("{}: {e}", out_path.display())))?;
+            let mut w = BufWriter::with_capacity(256 * 1024, f);
+            std::io::copy(&mut entry, &mut w).map_err(|e| CatableError::Io(e.to_string()))?;
+            w.flush().map_err(|e| CatableError::Io(e.to_string()))?;
+        }
+        if last.elapsed() >= Duration::from_millis(150) {
+            last = Instant::now();
+            progress(ServiceProgress {
+                phase: "extract",
+                done: i as u64 + 1,
+                total,
+                message: "Extracting binaries".into(),
+            });
+        }
+    }
+    progress(ServiceProgress { phase: "extract", done: total, total, message: "Extraction complete".into() });
+    Ok(())
+}
+
+/// Locate an executable (by file name, case-insensitive) anywhere ≤ 4 levels
+/// deep under `root` — vendor archives nest binaries under varying folders.
+pub fn find_exe(root: &Path, names: &[&str]) -> Option<PathBuf> {
+    fn walk(dir: &Path, names: &[String], depth: u8) -> Option<PathBuf> {
+        let entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
+        for e in &entries {
+            let p = e.path();
+            if p.is_file() {
+                let n = e.file_name().to_string_lossy().to_ascii_lowercase();
+                if names.iter().any(|x| *x == n) {
+                    return Some(p);
                 }
             }
         }
-        crate::service::EngineType::Mysql | crate::service::EngineType::Mariadb => {
-            let init = bin_dir.join("mysql_install_db");
-            if init.exists() {
-                let out = Command::new(&init)
-                    .args(["--datadir", &data_dir.to_string_lossy(), "--skip-test-db"])
-                    .output();
-                match out {
-                    Ok(o) if o.status.success() => {
-                        std::fs::write(&marker, "1").ok();
-                        ok = true;
-                    }
-                    Ok(o) => return Err(CatableError::Io(format!(
-                        "mysql_install_db failed: {}",
-                        String::from_utf8_lossy(&o.stderr)
-                    ))),
-                    Err(e) => return Err(CatableError::Io(format!("mysql_install_db spawn: {}", e))),
-                }
-            }
+        if depth == 0 {
+            return None;
         }
+        // Prefer `bin` folders first for speed.
+        let mut dirs: Vec<PathBuf> = entries.iter().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        dirs.sort_by_key(|p| !p.ends_with("bin"));
+        dirs.into_iter().find_map(|d| walk(&d, names, depth - 1))
     }
-    Ok(ok)
-}
-
-// engine-specific archive filename
-trait EngineArchive {
-    fn engine_archive_name(&self) -> String;
-}
-impl EngineArchive for ServiceVersion {
-    fn engine_archive_name(&self) -> String {
-        format!(
-            "engine-{}-{}-{}",
-            self.engine,
-            self.version,
-            TargetOs::current()
-        )
-        .to_lowercase()
-    }
-}
-impl std::fmt::Display for TargetOs {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TargetOs::Linux => write!(f, "linux"),
-            TargetOs::Macos => write!(f, "macos"),
-            TargetOs::Windows => write!(f, "windows"),
-        }
-    }
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let names: Vec<String> = names.iter().map(|n| format!("{n}{suffix}").to_ascii_lowercase()).collect();
+    walk(root, &names, 4)
 }
 
 #[cfg(test)]
@@ -269,16 +218,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn archive_ext_matches_os() {
-        let ext = TargetOs::Windows.archive_ext();
-        assert_eq!(ext, "zip");
-        let ext = TargetOs::Linux.archive_ext();
-        assert_eq!(ext, "tar.gz");
-    }
-
-    #[test]
-    fn current_os_is_one_of() {
-        let os = TargetOs::current();
-        assert!(matches!(os, TargetOs::Linux | TargetOs::Macos | TargetOs::Windows));
+    fn skips_bulky_entries() {
+        assert!(skip_entry(Path::new("pgsql/pgAdmin 4/bin/x.dll")));
+        assert!(skip_entry(Path::new("pgsql/doc/postgresql/html/a.html")));
+        assert!(skip_entry(Path::new("mysql-8.4.5-winx64/bin/mysqld.pdb")));
+        assert!(!skip_entry(Path::new("pgsql/bin/postgres.exe")));
+        assert!(!skip_entry(Path::new("mysql-8.4.5-winx64/lib/plugin/auth.dll")));
+        assert!(!skip_entry(Path::new("mysql-8.4.5-winx64/share/english/errmsg.sys")));
     }
 }

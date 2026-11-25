@@ -2,6 +2,9 @@
   import { t } from '$lib/i18n/index.svelte';
   import { getToasts, removeToast, getConfirmDialog, resolveConfirm } from '$lib/stores/uiNotifications.svelte';
   import UpdateToast from './UpdateToast.svelte';
+  import { fly, fade, scale } from 'svelte/transition';
+  import { flip } from 'svelte/animate';
+  import { cubicOut } from 'svelte/easing';
 
   const toasts = $derived(getToasts());
   const confirm = $derived(getConfirmDialog());
@@ -11,7 +14,10 @@
 <div class="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 max-w-sm pointer-events-none">
   {#each toasts as toast (toast.id)}
     <div
-      class="pointer-events-auto p-4 rounded-xl shadow-2xl border text-sm flex items-start gap-3 backdrop-blur-md transition-all duration-300 transform translate-y-0
+      in:fly={{ y: 14, duration: 200, easing: cubicOut }}
+      out:fade={{ duration: 140 }}
+      animate:flip={{ duration: 180 }}
+      class="pointer-events-auto p-4 rounded-xl shadow-2xl border text-sm flex items-start gap-3
       {toast.type === 'success'
         ? 'bg-white/95 dark:bg-neutral-900/95 border-emerald-500/40'
         : toast.type === 'error'
@@ -45,8 +51,8 @@
 
 <!-- Global Confirm Dialog Modal -->
 {#if confirm.isOpen}
-  <div class="fixed inset-0 z-[99999] bg-black/40 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-    <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+  <div class="fixed inset-0 z-[99999] bg-black/40 dark:bg-black/70 flex items-center justify-center p-4" transition:fade={{ duration: 120 }}>
+    <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4" in:scale={{ start: 0.96, duration: 160, easing: cubicOut }}>
       <div class="flex items-center gap-3">
         <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 {confirm.danger ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20' : 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20'}">
           {#if confirm.danger}

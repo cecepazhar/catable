@@ -26,11 +26,13 @@ parking_lot = "0.12"
 argon2 = "0.5"
 
 [profile.release]
-opt-level = "z"
+# Speed over size: full optimizations for query/grid hot paths.
+opt-level = 3
 lto = "thin"
 codegen-units = 16
 panic = "unwind"
 strip = true
+incremental = false
 
 [profile.release.package.libduckdb-sys]
 opt-level = 2

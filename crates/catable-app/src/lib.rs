@@ -91,17 +91,29 @@ pub fn run() {
             // AI DBA Copilot
             commands::ai_chat,
             commands::ai_explain,
-            // DB Service Engine Manager (CAT-SVC)
+            // DB Service Engine Manager (DBngin-style)
             commands::svc_list,
             commands::svc_get,
-            commands::svc_create,
-            commands::svc_stop,
-            commands::svc_remove,
-            commands::svc_open_in_studio,
+            commands::svc_engine_versions,
             commands::svc_available_versions,
+            commands::svc_suggest_port,
+            commands::svc_create,
+            commands::svc_start,
+            commands::svc_restart,
+            commands::svc_stop,
+            commands::svc_stop_all,
+            commands::svc_update,
+            commands::svc_remove,
+            commands::svc_logs,
+            commands::svc_reveal_data_dir,
+            commands::svc_open_in_studio,
             commands::svc_probe,
             commands::svc_test_connection
-        ]);
+        ])
+        .setup(|app| {
+            commands::spawn_service_autostart(app.handle().clone());
+            Ok(())
+        });
 
     builder
         .run(tauri::generate_context!())

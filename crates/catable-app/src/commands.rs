@@ -841,98 +841,192 @@ pub async fn ai_explain(
 }
 
 
-// ===================== DB Service Engine Manager (CAT-SVC) =====================
-use catable_core::service::{create_service, EngineType, DbService};
-use catable_core::service::{get as svc_api_get, list as svc_api_list, remove as svc_api_remove, stop as svc_api_stop};
-use catable_core::service::{probe_detail, ProbeResult};
+// ===================== DB Service Engine Manager (DBngin-style) =====================
+use catable_core::service::{self as svc, DbService, EngineType, EngineVersionInfo, ProbeResult, ServiceProgress};
 use catable_core::Environment;
+use tauri::Emitter;
 
-#[tauri::command]
-pub fn svc_list() -> Result<Vec<DbService>, String> {
-    Ok(svc_api_list().map_err(|e| e.to_string())?)
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SvcProgressEvent {
+    id: String,
+    #[serde(flatten)]
+    progress: ServiceProgress,
+}
+
+fn emit_progress(app: &tauri::AppHandle, id: &str, progress: ServiceProgress) {
+    let _ = app.emit("svc-progress", SvcProgressEvent { id: id.to_string(), progress });
+}
+
+fn parse_engine(engine: &str) -> Result<EngineType, String> {
+    EngineType::parse(engine).ok_or_else(|| format!("Unknown engine: {engine}"))
+}
+
+async fn blocking<R: Send + 'static>(
+    f: impl FnOnce() -> Result<R, String> + Send + 'static,
+) -> Result<R, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
-pub fn svc_get(service_id: String) -> Result<DbService, String> {
-    Ok(svc_api_get(&service_id).map_err(|e| e.to_string())?)
+pub async fn svc_list() -> Result<Vec<DbService>, String> {
+    blocking(|| svc::list().map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn svc_create(
-    engine: String,
-    version: String,
-    name: String,
-    preferred_port: Option<u16>,
-) -> Result<DbService, String> {
-    let eng = match engine.as_str() {
-        "postgres" | "postgresql" => EngineType::Postgres,
-        "mysql" => EngineType::Mysql,
-        "mariadb" => EngineType::Mariadb,
-        _ => return Err(format!("unknown engine: {}", engine)),
-    };
-    let port = preferred_port.unwrap_or_else(|| match eng {
-        EngineType::Postgres => 5432,
-        _ => 3306,
-    });
-    Ok(create_service(eng, &version, &name, port).map_err(|e| e.to_string())?)
+pub async fn svc_get(service_id: String) -> Result<DbService, String> {
+    blocking(move || svc::get(&service_id).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn svc_stop(service_id: String) -> Result<(), String> {
-    svc_api_stop(&service_id).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn svc_remove(service_id: String) -> Result<(), String> {
-    Ok(svc_api_remove(&service_id).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
-pub fn svc_open_in_studio(service_id: String) -> Result<ConnectionConfig, String> {
-    let svc = svc_api_get(&service_id).map_err(|e| e.to_string())?;
-    let (driver, port) = match svc.engine {
-        EngineType::Postgres => (DriverKind::Postgres, svc.port),
-        EngineType::Mysql | EngineType::Mariadb => (DriverKind::Mysql, svc.port),
-    };
-    Ok(ConnectionConfig {
-        id: format!("svc-{}", svc.id),
-        name: svc.name.clone(),
-        driver,
-        environment: Environment::Development,
-        host: "127.0.0.1".into(),
-        port,
-        database: "catable".into(),
-        user: "catable".into(),
-        password: Some("catable_pass".into()),
-        read_only: false,
-        ssh_tunnel: None,
-        group_name: None,
-        workspace_id: None,
-        connect_timeout_secs: None,
-    })
+pub fn svc_engine_versions() -> Vec<EngineVersionInfo> {
+    svc::engine_versions()
 }
 
 #[tauri::command]
 pub fn svc_available_versions(engine: String) -> Result<Vec<String>, String> {
-    let eng = match engine.as_str() {
-        "postgres" | "postgresql" => EngineType::Postgres,
-        "mysql" => EngineType::Mysql,
-        "mariadb" => EngineType::Mariadb,
-        _ => return Err(format!("unknown engine: {}", engine)),
+    Ok(parse_engine(&engine)?.versions().into_iter().map(String::from).collect())
+}
+
+#[tauri::command]
+pub async fn svc_suggest_port(engine: String) -> Result<u16, String> {
+    let eng = parse_engine(&engine)?;
+    blocking(move || Ok(svc::suggest_port(eng))).await
+}
+
+#[tauri::command]
+pub async fn svc_create(
+    engine: String,
+    version: String,
+    name: String,
+    preferred_port: Option<u16>,
+    auto_start: Option<bool>,
+) -> Result<DbService, String> {
+    let eng = parse_engine(&engine)?;
+    let port = preferred_port.unwrap_or_else(|| eng.default_port());
+    blocking(move || {
+        svc::create_service(eng, &version, &name, port, auto_start.unwrap_or(false))
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn svc_start(app: tauri::AppHandle, service_id: String) -> Result<DbService, String> {
+    blocking(move || {
+        let mut cb = |p: ServiceProgress| emit_progress(&app, &service_id, p);
+        svc::start(&service_id, &mut cb).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn svc_restart(app: tauri::AppHandle, service_id: String) -> Result<DbService, String> {
+    blocking(move || {
+        let mut cb = |p: ServiceProgress| emit_progress(&app, &service_id, p);
+        svc::restart(&service_id, &mut cb).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn svc_stop(service_id: String) -> Result<(), String> {
+    blocking(move || svc::stop(&service_id).map(|_| ()).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn svc_stop_all() -> Result<usize, String> {
+    blocking(|| Ok(svc::stop_all())).await
+}
+
+#[tauri::command]
+pub async fn svc_update(
+    service_id: String,
+    name: Option<String>,
+    port: Option<u16>,
+    auto_start: Option<bool>,
+) -> Result<DbService, String> {
+    blocking(move || svc::update(&service_id, name, port, auto_start).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn svc_remove(service_id: String, delete_data: Option<bool>) -> Result<(), String> {
+    blocking(move || svc::remove(&service_id, delete_data.unwrap_or(true)).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn svc_logs(service_id: String, lines: Option<usize>) -> Result<String, String> {
+    blocking(move || svc::logs(&service_id, lines.unwrap_or(200)).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn svc_reveal_data_dir(service_id: String) -> Result<(), String> {
+    blocking(move || {
+        let s = svc::get(&service_id).map_err(|e| e.to_string())?;
+        let _ = std::fs::create_dir_all(&s.data_dir);
+        #[cfg(windows)]
+        let opener = "explorer";
+        #[cfg(target_os = "macos")]
+        let opener = "open";
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        let opener = "xdg-open";
+        std::process::Command::new(opener)
+            .arg(&s.data_dir)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn svc_open_in_studio(service_id: String) -> Result<ConnectionConfig, String> {
+    let s = blocking(move || svc::get(&service_id).map_err(|e| e.to_string())).await?;
+    let (driver, database) = match s.engine {
+        EngineType::Postgres => (DriverKind::Postgres, if s.database.is_empty() { "postgres".to_string() } else { s.database.clone() }),
+        EngineType::Mysql => (DriverKind::Mysql, s.database.clone()),
+        EngineType::Mariadb => (DriverKind::MariaDb, s.database.clone()),
+        EngineType::Redis => (DriverKind::Redis, "0".to_string()),
     };
-    Ok(eng.versions().iter().map(|v| v.to_string()).collect())
+    Ok(ConnectionConfig {
+        id: format!("svc-{}", s.id),
+        name: s.name.clone(),
+        driver,
+        environment: Environment::Development,
+        host: "127.0.0.1".into(),
+        port: s.port,
+        database,
+        user: s.default_user().to_string(),
+        password: None,
+        read_only: false,
+        ssh_tunnel: None,
+        group_name: Some("Local Services".into()),
+        workspace_id: None,
+        connect_timeout_secs: Some(5),
+    })
 }
 
 #[tauri::command]
-pub fn svc_probe(service_id: String) -> Result<ProbeResult, String> {
-    let svc = svc_api_get(&service_id).map_err(|e| e.to_string())?;
-    Ok(probe_detail(&svc, std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?)
+pub async fn svc_probe(service_id: String) -> Result<ProbeResult, String> {
+    blocking(move || {
+        let s = svc::get(&service_id).map_err(|e| e.to_string())?;
+        svc::probe_detail(&s, std::time::Duration::from_millis(800)).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn svc_test_connection(service_id: String) -> Result<bool, String> {
-    let svc = svc_api_get(&service_id).map_err(|e| e.to_string())?;
-    let probe = probe_detail(&svc, std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    Ok(probe.reachable)
+pub async fn svc_test_connection(service_id: String) -> Result<bool, String> {
+    Ok(svc_probe(service_id).await?.reachable)
+}
+
+/// Start auto-start services in the background once the app is up.
+pub fn spawn_service_autostart(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut cb = |id: &str, p: ServiceProgress| emit_progress(&app, id, p);
+        svc::autostart(&mut cb);
+        let _ = app.emit("svc-changed", ());
+    });
 }
