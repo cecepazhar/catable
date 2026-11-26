@@ -949,8 +949,11 @@ const en = {
       supportBody: 'CATable’s core is free and open source. Support on Ko-fi keeps development active.'
     },
     security: {
-      title: 'Zero-Knowledge Vault Configuration',
-      subtitle: 'CATable enforces local-first encryption for host records, passwords, and private keys.',
+      title: 'Vault protection',
+      subtitle: 'How your saved connections are protected on this computer.',
+      protectDb: 'The whole connection database is encrypted (SQLCipher), and passwords are encrypted again inside it. Its keys are locked to your Windows account, so a copied data folder cannot be opened elsewhere.',
+      protectOther: 'This does not protect against programs already running under your Windows account. CATable does not ask for a master password.',
+      protectBackup: 'Keys do not move to another computer. Before reinstalling Windows or changing computers, use Backup on the Connections page. That file is NOT encrypted and contains passwords: keep it safe.',
       rekeyNote: 'Changing the master password re-encrypts the whole local database with a key derived from the new password. Keep the app open until it finishes.',
       current: 'Current master password',
       new: 'New master password (min. {{min}} chars)',

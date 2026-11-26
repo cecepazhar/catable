@@ -950,8 +950,11 @@ const id: Dictionary = {
       supportBody: 'Inti CATable gratis dan open source. Dukungan di Ko-fi menjaga pengembangan tetap aktif.'
     },
     security: {
-      title: 'Konfigurasi Vault Zero-Knowledge',
-      subtitle: 'CATable menerapkan enkripsi lokal untuk data host, kata sandi, dan kunci privat.',
+      title: 'Perlindungan vault',
+      subtitle: 'Cara koneksi tersimpan dilindungi di komputer ini.',
+      protectDb: 'Seluruh database koneksi dienkripsi (SQLCipher), dan password dienkripsi lagi di dalamnya. Kuncinya terikat ke akun Windows kamu, jadi folder data yang disalin tidak bisa dibuka di tempat lain.',
+      protectOther: 'Ini tidak melindungi dari program yang sudah berjalan di akun Windows kamu. CATable tidak meminta master password.',
+      protectBackup: 'Kunci tidak ikut pindah ke komputer lain. Sebelum instal ulang Windows atau ganti komputer, pakai tombol Backup di halaman Connections. File itu TIDAK terenkripsi dan berisi password: simpan di tempat aman.',
       rekeyNote: 'Mengganti master password akan mengenkripsi ulang seluruh database lokal dengan kunci dari kata sandi baru. Biarkan aplikasi tetap terbuka sampai selesai.',
       current: 'Master password saat ini',
       new: 'Master password baru (min. {{min}} karakter)',

@@ -81,11 +81,8 @@ pub struct Vault {
 impl Vault {
     pub fn open() -> Result<Self, CatableError> {
         let dir = app_data_dir()?;
-        let path = dir.join("vault.db");
-        let conn = Connection::open(&path).map_err(|e| CatableError::Vault(e.to_string()))?;
-
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| CatableError::Vault(e.to_string()))?;
+        // Encrypted at rest; a vault written by an older version is migrated here.
+        let conn = crate::secure_store::open_vault_db(&dir)?;
 
         conn.execute_batch(
             r#"
@@ -618,7 +615,7 @@ impl Vault {
         let cipher = Aes256Gcm::new_from_slice(&derived_key)
             .map_err(|e| CatableError::Vault(e.to_string()))?;
         let mut nonce_bytes = [0u8; 12];
-        nonce_bytes.copy_from_slice(&uuid::Uuid::new_v4().as_bytes()[..12]);
+        aes_gcm::aead::rand_core::RngCore::fill_bytes(&mut aes_gcm::aead::OsRng, &mut nonce_bytes);
         let nonce = aes_gcm::aead::Nonce::<Aes256Gcm>::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
@@ -723,40 +720,9 @@ impl Vault {
 // AES-256-GCM credential encryption (encrypted credential blobs)
 // ---------------------------------------------------------------------------
 
-/// Returns the AES-256-GCM key (32 bytes) used to encrypt credentials.
-/// The key is generated on first use and persisted so credentials can be
-/// decrypted on subsequent runs.
+/// The AES-256-GCM key for credential fields. It is stored sealed to the OS user account.
 pub fn get_vault_encryption_key() -> Result<[u8; 32], CatableError> {
-    let dir = app_data_dir()?;
-    let key_path = dir.join("vault_key.bin");
-
-    if let Ok(bytes) = std::fs::read(&key_path) {
-        if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            return Ok(key);
-        }
-    }
-
-    // Generate a random 32-byte key and store it
-    let key = {
-        let mut buf: [u8; 32] = [0u8; 32];
-        use std::io::Read;
-        let mut f = std::fs::File::open("/dev/urandom").ok();
-        if let Some(f) = f.as_mut() {
-            f.read_exact(&mut buf).ok();
-        } else {
-            buf[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-            buf[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        }
-        buf
-    };
-    std::fs::write(&key_path, key).map_err(|e| CatableError::Io(e.to_string()))?;
-    // Best-effort to tighten permissions on the key file
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(key)
+    Ok(*crate::secure_store::credential_key(&app_data_dir()?)?)
 }
 
 /// Encrypts a credential string using AES-256-GCM with a random 12-byte nonce.
@@ -768,7 +734,7 @@ fn encrypt_credential(password: &str) -> Result<String, CatableError> {
 
     // Generate a random 12-byte nonce
     let mut nonce_bytes = [0u8; 12];
-    nonce_bytes.copy_from_slice(&uuid::Uuid::new_v4().as_bytes()[..12]);
+    aes_gcm::aead::rand_core::RngCore::fill_bytes(&mut aes_gcm::aead::OsRng, &mut nonce_bytes);
     let nonce = aes_gcm::aead::Nonce::<Aes256Gcm>::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
@@ -906,22 +872,8 @@ pub fn reset_vault() -> Result<(), CatableError> {
         std::fs::remove_file(&salt).map_err(|e| CatableError::Io(e.to_string()))?;
     }
 
-    // Remove the encryption key file so credentials can no longer be decrypted
-    let key_path = app_data_dir()?.join("vault_key.bin");
-    if key_path.exists() {
-        std::fs::remove_file(&key_path).map_err(|e| CatableError::Io(e.to_string()))?;
-    }
-
-    // Remove the encrypted vault database itself
-    let db_path = app_data_dir()?.join("vault.db");
-    if db_path.exists() {
-        let _ = std::fs::remove_file(&db_path);
-    }
-    // Also remove WAL/SHM sidecar files
-    let db_shm = app_data_dir()?.join("vault.db-shm");
-    let db_wal = app_data_dir()?.join("vault.db-wal");
-    let _ = std::fs::remove_file(&db_shm);
-    let _ = std::fs::remove_file(&db_wal);
+    // The vault database and every key that could open it.
+    crate::secure_store::destroy(&app_data_dir()?)?;
 
     Ok(())
 }
@@ -987,6 +939,49 @@ mod tests {
         let encrypted = encrypt_credential(&pw).unwrap();
         let decrypted: zeroize::Zeroizing<String> = decrypt_credential(&encrypted).unwrap();
         assert_eq!(*decrypted, pw);
+    }
+
+    #[test]
+    fn a_vault_from_an_older_version_keeps_its_saved_passwords() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("catable-test-upgrade-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        unsafe { std::env::set_var("CATABLE_DATA_DIR", &tmp) };
+
+        // Recreate the ≤ 1.0.11 layout: a plaintext key file and a plaintext database.
+        let legacy_key = [9u8; 32];
+        std::fs::write(tmp.join("vault_key.bin"), legacy_key).unwrap();
+        let sealed_password = encrypt_credential("old-secret-pw").unwrap();
+        std::fs::remove_file(tmp.join("vault_key.sealed")).unwrap();
+        std::fs::write(tmp.join("vault_key.bin"), legacy_key).unwrap();
+        let old = Connection::open(tmp.join("vault.db")).unwrap();
+        old.pragma_update(None, "journal_mode", "WAL").unwrap();
+        old.execute_batch(
+            "CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT NOT NULL, driver TEXT NOT NULL,
+                environment TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL, database TEXT NOT NULL,
+                user TEXT NOT NULL, read_only INTEGER NOT NULL DEFAULT 0, encrypted_password TEXT,
+                ssh_tunnel TEXT, group_name TEXT, workspace_id TEXT DEFAULT 'default')",
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO connections (id, name, driver, environment, host, port, database, user, encrypted_password)
+             VALUES ('c1', 'Old', '\"postgres\"', '\"development\"', 'db.old.internal', 5432, 'app', 'u', ?1)",
+            params![sealed_password],
+        )
+        .unwrap();
+        drop(old);
+
+        let vault = Vault::open().unwrap();
+        let list = vault.list_connections().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].host, "db.old.internal");
+        assert_eq!(list[0].password.as_deref(), Some("old-secret-pw"));
+        drop(vault);
+
+        let bytes = std::fs::read(tmp.join("vault.db")).unwrap();
+        assert!(!bytes.windows(15).any(|w| w == b"db.old.internal"));
+        assert!(!tmp.join("vault_key.bin").exists());
+        let _ = std::fs::remove_dir_all(tmp);
     }
 
     #[test]

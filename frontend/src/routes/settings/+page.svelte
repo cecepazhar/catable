@@ -775,51 +775,12 @@
       <h2 class="text-lg font-semibold text-neutral-900 dark:text-white">{t('settings.security.title')}</h2>
       <p class="{MUTED} text-sm">{t('settings.security.subtitle')}</p>
 
-      <form onsubmit={handleChangeMasterPassword} class="max-w-md space-y-4 pt-2">
-        <p class="text-xs {MUTED}">{t('settings.security.rekeyNote')}</p>
-        <div>
-          <label for="current-pass" class={LABEL}>{t('settings.security.current')}</label>
-          <input
-            id="current-pass"
-            type={showPasswords ? 'text' : 'password'}
-            required
-            autocomplete="current-password"
-            bind:value={currentPassword}
-            class={INPUT} />
-        </div>
-        <div>
-          <label for="new-pass" class={LABEL}>{t('settings.security.new', { min: MIN_VAULT_PASSWORD_LEN })}</label>
-          <input
-            id="new-pass"
-            type={showPasswords ? 'text' : 'password'}
-            required
-            minlength={MIN_VAULT_PASSWORD_LEN}
-            autocomplete="new-password"
-            bind:value={newPassword}
-            class={INPUT} />
-        </div>
-        <div>
-          <label for="confirm-pass" class={LABEL}>{t('settings.security.confirm')}</label>
-          <input
-            id="confirm-pass"
-            type={showPasswords ? 'text' : 'password'}
-            required
-            minlength={MIN_VAULT_PASSWORD_LEN}
-            autocomplete="new-password"
-            bind:value={confirmPassword}
-            class={INPUT} />
-        </div>
-        <label class="flex items-center gap-2 text-xs {MUTED}">
-          <input type="checkbox" bind:checked={showPasswords} class="rounded" />
-          {t('settings.security.showPasswords')}
-        </label>
-        <button
-          type="submit"
-          disabled={isChangingPassword}
-          class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-sm font-medium rounded-md transition-colors">
-          {isChangingPassword ? t('settings.security.reencrypting') : t('settings.security.change')}
-        </button>
-      </form>
+      <!-- No master-password form: the vault key is sealed to the OS account, not to a password. -->
+      <ul class="list-disc pl-5 space-y-1.5 text-xs {MUTED}">
+        <li>{t('settings.security.protectDb')}</li>
+        <li>{t('settings.security.protectOther')}</li>
+        <li>{t('settings.security.protectBackup')}</li>
+      </ul>
 
       <!-- Audit Trail Settings -->
       <div class="border-t border-neutral-200 dark:border-neutral-800 pt-6 space-y-3">

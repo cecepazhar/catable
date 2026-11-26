@@ -335,3 +335,24 @@ describe('DatabaseStore schemas', () => {
     expect((args as { request: { schema: string } }).request.schema).toBe('sales');
   });
 });
+describe('DatabaseStore home actions', () => {
+  it('open() shows an already-open connection again without reconnecting', async () => {
+    const be = backend();
+    await dbStore.open(connA);
+    await dbStore.open(connB);
+    await dbStore.open(connA);
+    expect(be.opened()).toBe(2);
+    expect(dbStore.activeConnection.id).toBe('conn-a');
+    expect(dbStore.openConnections).toHaveLength(2);
+  });
+
+  it('closeAll() closes every session and returns to the disconnected state', async () => {
+    const be = backend();
+    await dbStore.open(connA);
+    await dbStore.open(connB);
+    dbStore.closeAll();
+    expect(dbStore.openConnections).toHaveLength(0);
+    expect(dbStore.isConnected).toBe(false);
+    expect(be.calls('session_close').map((c) => (c[1] as { sessionId: string }).sessionId).sort()).toEqual(['s1', 's2']);
+  });
+});

@@ -5,6 +5,7 @@
   import { dbStore } from '$lib/stores/database.svelte';
   import { showToast } from '$lib/stores/uiNotifications.svelte';
   import { errorText } from '$lib/errors';
+  import { confirmLeave } from '$lib/stores/unsavedGuard';
 
   let { compact = false }: { compact?: boolean } = $props();
 
@@ -54,6 +55,7 @@
       open = false;
       return;
     }
+    if (!(await confirmLeave())) return;
     busy = db;
     try {
       await dbStore.switchDatabase(db);

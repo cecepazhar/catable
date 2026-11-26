@@ -1,8 +1,9 @@
 //! CATable core — encrypted connection vault, SQL guardrails & driver registry.
 //!
 //! Design notes (PRD §3.4 & §4):
-//! - Credentials & SSH keys live in a local SQLCipher database; plaintext
-//!   secrets are zeroized out of memory after use.
+//! - Profiles live in a local SQLCipher database whose key is sealed with the OS user
+//!   account (see `secure_store`); passwords and SSH secrets are encrypted again.
+//! - SSH servers are only used once their host key is trusted (see `ssh_hosts`).
 //! - Every query (user-authored, AI-generated, or inline edit) passes through
 //!   the guardrail engine before reaching a live driver.
 //! - The driver registry exposes a capability matrix so the UI can disable
@@ -14,6 +15,8 @@ mod error;
 mod executor;
 mod guard;
 mod paths;
+mod secure_store;
+pub mod ssh_hosts;
 pub mod service;
 pub mod mutation;
 pub mod schema;

@@ -876,6 +876,8 @@ mod tests {
     }
 
     fn sqlite_config(path: &std::path::Path) -> ConnectionConfig {
+        // The app refuses a full path that does not exist, so the sample database is made here.
+        QueryExecutor::ensure_sample_data(&path.to_path_buf()).expect("seed test database");
         let mut cfg = ConnectionConfig::sandbox();
         cfg.id = format!("it-{}", uuid::Uuid::new_v4());
         cfg.name = "session test".into();

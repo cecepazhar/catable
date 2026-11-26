@@ -66,7 +66,7 @@
         </div>
       </div>
 
-      <p class="text-xs text-neutral-600 dark:text-neutral-300 leading-relaxed pl-13">
+      <p class="text-xs text-neutral-600 dark:text-neutral-300 leading-relaxed pl-13 whitespace-pre-wrap break-words select-text">
         {confirm.message}
       </p>
 

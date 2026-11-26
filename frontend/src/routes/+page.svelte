@@ -17,6 +17,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { portal } from '$lib/actions/portal';
   import { errorText } from '$lib/errors';
+  import { withHostTrust } from '$lib/sshTrust';
   import { describeConnectResult } from '$lib/connectErrors';
 
   const ambient = getAmbientStore();
@@ -47,6 +48,14 @@
   let sshTestResult = $state<{ success: boolean; message: string; latency_ms?: number } | null>(null);
 
   async function handleExportVault() {
+    const agreed = await confirmModal(
+      'This backup is a plain JSON file: saved database and SSH passwords are readable by anyone who opens it. Keep it somewhere safe and delete it when you are done.',
+      'Export readable passwords?',
+      true,
+      'Export anyway',
+      'Cancel'
+    );
+    if (!agreed) return;
     try {
       showToast('Exporting vault backup...', 'info');
       const jsonStr = await invoke<string>('export_json_backup');
@@ -389,7 +398,7 @@
     dbListLoading = true;
     dbListError = null;
     try {
-      dbList = await invoke<string[]>('server_list_databases', { config: formConfig() });
+      dbList = await withHostTrust(() => invoke<string[]>('server_list_databases', { config: formConfig() }));
     } catch (e) {
       dbList = null;
       dbListError = errorText(e) || 'Could not list databases.';
@@ -606,7 +615,7 @@
   async function handleQuickConnect(c: ConnectionConfig, e?: MouseEvent) {
     if (e) e.stopPropagation();
     try {
-      await dbStore.connect(c);
+      await dbStore.open(c);
       showToast(`Connected to "${c.name}".`, 'success');
       await goto('/table-browser');
     } catch (err: any) {
@@ -630,7 +639,7 @@
       <div>
         <h1 class="text-lg font-bold tracking-tight text-neutral-900 dark:text-neutral-100 leading-tight">Database Connections</h1>
         <p class="text-xs text-neutral-500 dark:text-neutral-400">
-          {dbStore.connections.length} connections across {availableGroups.length > 0 ? `${availableGroups.length} workspaces` : 'default workspace'} · Zero-Knowledge Encrypted
+          {dbStore.connections.length} connections across {availableGroups.length > 0 ? `${availableGroups.length} workspaces` : 'default workspace'} · Encrypted on this device
         </p>
       </div>
     </div>
@@ -1325,7 +1334,7 @@
 
                 <div class="space-y-1.5 md:col-span-2">
                   <label for="modal-pass-input" class="font-semibold text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider">
-                    Password (Stored Zero-Knowledge in Vault)
+                    Password (stored encrypted in the vault)
                   </label>
                   <div class="relative">
                     <input
@@ -1581,7 +1590,7 @@
                 <div class="text-[11px] font-mono text-neutral-500 dark:text-neutral-400">
                   <div>ID: {form.id || '(Will be generated on save)'}</div>
                   <div>Driver: {form.driver}</div>
-                  <div>Security: Zero-Knowledge AES-256-GCM + PBKDF2</div>
+                  <div>Security: SQLCipher vault + AES-256-GCM credentials</div>
                 </div>
               </div>
             </div>

@@ -30,6 +30,7 @@
   import DatabaseIcon from '$lib/components/DatabaseIcon.svelte';
   import DatabaseSwitcher from '$lib/components/DatabaseSwitcher.svelte';
   import { runBoot } from '$lib/boot';
+  import { confirmLeave } from '$lib/stores/unsavedGuard';
   import { goto } from '$app/navigation';
   import { errorText } from '$lib/errors';
 
@@ -244,8 +245,10 @@
   }
 
   async function connectToDb(c: ConnectionConfig) {
+    // Showing another open connection is handled by the grid itself; a fresh connect is not.
+    if (!dbStore.openConnections.some((x) => x.id === c.id) && !(await confirmLeave())) return;
     try {
-      await dbStore.connect(c);
+      await dbStore.open(c);
       showToast(`Connected to "${c.name}"`, 'success');
       void goto('/table-browser');
     } catch (e) {
@@ -253,18 +256,45 @@
     }
   }
 
-  function handleDisconnect() {
+  async function handleDisconnect() {
+    if (!(await confirmLeave())) return;
     dbStore.disconnect();
     void goto(dbStore.openConnections.length > 0 ? '/table-browser' : '/');
   }
 
   function switchConnection(id: string) {
     void dbStore.switchConnection(id);
-    if (page.url.pathname === '/' || page.url.pathname === '/groups') void goto('/table-browser');
+    if (homeView || page.url.pathname === '/') void goto('/table-browser');
   }
 
-  function closeConnection(id: string) {
+  // Home mode: on the Connections / Workspaces pages the sidebar shows the start screen again,
+  // while open connections stay alive in the rail. Services and Settings keep the current mode.
+  const HOME_ROUTES = ['/', '/groups'];
+  const STUDIO_ROUTES = ['/table-browser', '/sql-studio', '/schema-erd', '/ai-copilot'];
+  let homeView = $state(true);
+  $effect(() => {
+    const path = page.url.pathname;
+    if (HOME_ROUTES.includes(path)) homeView = true;
+    else if (STUDIO_ROUTES.includes(path)) homeView = false;
+  });
+
+  async function closeAllConnections() {
+    const n = dbStore.openConnections.length;
+    const ok = await confirmModal(
+      `Close all ${n} open connection${n === 1 ? '' : 's'}? Saved connections are not deleted.`,
+      'Close all connections',
+      false,
+      'Close all',
+      'Cancel'
+    );
+    if (!ok || !(await confirmLeave())) return;
+    dbStore.closeAll();
+    void goto('/');
+  }
+
+  async function closeConnection(id: string) {
     const wasActive = dbStore.activeConnection.id === id;
+    if (wasActive && !(await confirmLeave())) return;
     dbStore.closeConnection(id);
     if (wasActive && dbStore.openConnections.length === 0) void goto('/');
   }
@@ -418,8 +448,18 @@
     <!-- Open-connections rail (TablePlus): one icon per live connection -->
     {#if dbStore.openConnections.length > 0}
       <nav class="hidden md:flex flex-col items-center gap-1.5 w-14 shrink-0 pt-2 pb-2 border-r border-[var(--ca-border)]" aria-label="Open connections">
+        <a
+          href="/"
+          class="w-11 h-9 flex items-center justify-center rounded-lg border transition-colors {homeView ? 'bg-[var(--ca-brand-glow)] border-[var(--ca-brand)] text-[var(--ca-brand)]' : 'border-transparent text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200/60 dark:hover:bg-neutral-800/70'}"
+          title="Home — open connections stay connected"
+          aria-label="Home"
+          aria-current={homeView ? 'page' : undefined}
+        >
+          <svg class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 11.5 12 4l9 7.5M5.5 10v9a1 1 0 001 1H10v-6h4v6h3.5a1 1 0 001-1v-9" /></svg>
+        </a>
+        <span class="w-6 h-px bg-[var(--ca-border)]" aria-hidden="true"></span>
         {#each dbStore.openConnections as oc, idx (oc.id)}
-          {@const on = dbStore.isConnected && dbStore.activeConnection.id === oc.id}
+          {@const on = !homeView && dbStore.isConnected && dbStore.activeConnection.id === oc.id}
           {@const env = ENV_STYLE[oc.environment] ?? ENV_STYLE.development}
           <div class="group relative w-11">
             <button
@@ -451,6 +491,16 @@
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-width="2" d="M12 5v14M5 12h14" /></svg>
         </a>
+        <button
+          type="button"
+          onclick={closeAllConnections}
+          class="mt-auto w-11 py-1 flex flex-col items-center gap-0.5 rounded-lg text-neutral-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
+          title="Close all connections"
+          aria-label="Close all connections"
+        >
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75" /></svg>
+          <span class="text-[8px] leading-tight text-center">Close all</span>
+        </button>
       </nav>
     {/if}
 
@@ -459,7 +509,7 @@
       class="hidden md:flex flex-col shrink-0 bg-transparent {isCollapsed ? 'w-14' : 'w-60'} transition-[width] duration-200 ease-out will-change-[width]"
       aria-label="Sidebar Navigasi Database"
     >
-      {#if !dbStore.isConnected}
+      {#if !dbStore.isConnected || homeView}
         <!-- ============================================== -->
         <!-- ANTARES SQL STYLE: CONNECTION MANAGER SIDEBAR -->
         <!-- ============================================== -->
@@ -714,8 +764,14 @@
                 <span class="shrink-0 font-semibold">Schema</span>
                 <select
                   value={dbStore.activeSchema ?? ''}
-                  onchange={(e) => {
-                    dbStore.setSchema((e.currentTarget as HTMLSelectElement).value);
+                  onchange={async (e) => {
+                    const select = e.currentTarget as HTMLSelectElement;
+                    const next = select.value;
+                    if (!(await confirmLeave())) {
+                      select.value = dbStore.activeSchema ?? '';
+                      return;
+                    }
+                    dbStore.setSchema(next);
                     if (page.url.pathname === '/table-browser') {
                       const first = dbStore.tables[0]?.name;
                       if (first) workspace.open(first);

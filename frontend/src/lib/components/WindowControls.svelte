@@ -7,6 +7,7 @@
     cmdWindowClose
   } from '$lib/generated/commands';
   import { t } from '$lib/i18n/index.svelte';
+  import { confirmLeave } from '$lib/stores/unsavedGuard';
 
   let isMaximized = $state(false);
 
@@ -49,6 +50,7 @@
   }
 
   async function handleClose() {
+    if (!(await confirmLeave())) return;
     try {
       const appWindow = getCurrentWindow();
       if (appWindow) {

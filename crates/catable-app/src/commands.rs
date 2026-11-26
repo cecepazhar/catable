@@ -214,6 +214,17 @@ pub async fn test_ssh_tunnel(
         .map_err(|e| format!("SSH test task failed: {e}"))
 }
 
+/// The user approved this server's key fingerprint.
+#[tauri::command]
+pub fn ssh_trust_host(host: String, port: u16, key_type: String, fingerprint: String) -> Result<(), String> {
+    catable_core::ssh_hosts::trust(&host, port, &key_type, &fingerprint).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn ssh_forget_host(host: String, port: u16) -> Result<(), String> {
+    catable_core::ssh_hosts::forget(&host, port).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn test_database_connection(
     config: ConnectionConfig,

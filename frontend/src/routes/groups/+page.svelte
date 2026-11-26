@@ -138,7 +138,7 @@
 
   async function handleConnect(c: ConnectionConfig) {
     try {
-      await dbStore.connect(c);
+      await dbStore.open(c);
       showToast(`Connected to "${c.name}"`, 'success');
       void goto('/table-browser');
     } catch (e) {

@@ -68,6 +68,9 @@ fn connect_ssh_session(tunnel: &SshTunnelConfig) -> Result<Session, CatableError
     sess.handshake()
         .map_err(|e| CatableError::Tunnel(format!("SSH handshake failed with '{addr}': {e}")))?;
 
+    // No credential leaves this machine until the server has proved who it is.
+    crate::ssh_hosts::verify(&sess, &tunnel.host, tunnel.port)?;
+
     match tunnel.auth_type {
         SshAuthType::Password => {
             let pass = tunnel

@@ -26,6 +26,8 @@ pub fn run() {
             commands::evaluate_query_safety,
             commands::test_database_connection,
             commands::test_ssh_tunnel,
+            commands::ssh_trust_host,
+            commands::ssh_forget_host,
             commands::session_open,
             commands::session_close,
             commands::session_execute,

@@ -7,7 +7,8 @@
   import { dbStore, type QueryResult, type TableStructure } from '$lib/stores/database.svelte';
   import { workspace } from '$lib/stores/workspace.svelte';
   import { showToast, confirmModal } from '$lib/stores/uiNotifications.svelte';
-  import { goto } from '$app/navigation';
+  import { goto, beforeNavigate } from '$app/navigation';
+  import { registerUnsavedGuard, confirmLeave } from '$lib/stores/unsavedGuard';
   import LoadingState from '$lib/components/LoadingState.svelte';
   import { errorText } from '$lib/errors';
   import RowDetailsInspector from '$lib/components/RowDetailsInspector.svelte';
@@ -196,6 +197,25 @@
       'Discard'
     );
   }
+
+  // Anything that would drop the staged edits asks through this check first.
+  onMount(() =>
+    registerUnsavedGuard(async () => {
+      if (!(await confirmDiscard())) return false;
+      staging.discard(); // agreed: later checks must not ask again
+      return true;
+    })
+  );
+
+  // Leaving the page (Home, logo, sidebar, Ctrl+T…) unmounts the grid and its edits.
+  beforeNavigate((nav) => {
+    if (!staging.hasPending || !nav.to || nav.to.url.pathname === nav.from?.url.pathname) return;
+    const target = nav.to.url;
+    nav.cancel();
+    void confirmLeave().then((ok) => {
+      if (ok) void goto(target.pathname + target.search);
+    });
+  });
 
   async function refresh() {
     if (!shown || !(await confirmDiscard())) return;

@@ -7,6 +7,7 @@
   import { workspace } from '$lib/stores/workspace.svelte';
   import { showToast } from '$lib/stores/uiNotifications.svelte';
   import { errorText } from '$lib/errors';
+  import { confirmLeave } from '$lib/stores/unsavedGuard';
 
   const palette = getPalette();
   let { onLock }: { onLock?: () => void } = $props();
@@ -46,6 +47,7 @@
       void goto('/table-browser');
       return;
     }
+    if (!(await confirmLeave())) return;
     try {
       await dbStore.connect(c);
       showToast(`Connected to "${c.name}"`, 'success');
@@ -116,7 +118,8 @@
           id: 'c:disconnect',
           title: `Disconnect from ${dbStore.activeConnection.name}`,
           kind: 'command',
-          run: () => {
+          run: async () => {
+            if (!(await confirmLeave())) return;
             dbStore.disconnect();
             void goto(dbStore.openConnections.length > 0 ? '/table-browser' : '/');
           },

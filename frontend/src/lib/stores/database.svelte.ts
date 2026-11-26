@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ConnectErrorKind } from '$lib/connectErrors';
 import type { ChangeSet } from '$lib/grid/staging.svelte';
 import { workspace } from '$lib/stores/workspace.svelte';
+import { withHostTrust } from '$lib/sshTrust';
 
 export type DriverKind = 'sqlite' | 'postgres' | 'mysql' | 'mariadb' | 'duckdb' | 'redis';
 export type Environment = 'development' | 'staging' | 'production';
@@ -289,6 +290,7 @@ class DatabaseStore {
     } else {
       const sid = this.sessions.get(cfg.id) ?? null;
       this.sessions.delete(cfg.id);
+      this.tableCache.delete(cfg.id); // edited settings may point somewhere else
       void this.closeSessionId(sid);
     }
     this.openConnections = this.openConnections.map((c) => (c.id === cfg.id ? cfg : c));
@@ -308,11 +310,11 @@ class DatabaseStore {
   }
 
   async testConnection(cfg: ConnectionConfig): Promise<ConnectionTestResult> {
-    return invoke<ConnectionTestResult>('test_database_connection', { config: cfg });
+    return withHostTrust(() => invoke<ConnectionTestResult>('test_database_connection', { config: cfg }), (r) => r.message);
   }
 
   async testSshTunnel(config: SshTunnelConfig): Promise<SshTestResult> {
-    return invoke<SshTestResult>('test_ssh_tunnel', { config });
+    return withHostTrust(() => invoke<SshTestResult>('test_ssh_tunnel', { config }), (r) => r.message);
   }
 
   // ---- Session lifecycle -------------------------------------------------------------------
@@ -334,7 +336,8 @@ class DatabaseStore {
 
     const attempt: Promise<string> = (async () => {
       // Sessions of other open connections stay alive; only this connection gets a new one.
-      const info = await invoke<SessionInfo>('session_open', { connectionId: connId });
+      // An unknown SSH server is only used after the user checked its fingerprint.
+      const info = await withHostTrust(() => invoke<SessionInfo>('session_open', { connectionId: connId }));
       this.sessions.set(connId, info.session_id);
       if (this.activeConnection.id === connId) {
         this.sessionId = info.session_id;
@@ -421,6 +424,28 @@ class DatabaseStore {
       this.loadError = messageOf(e);
       throw e;
     }
+  }
+
+  /** "Connect" from a list: an already-open connection is shown again (tabs kept), else opened. */
+  async open(conn: ConnectionConfig) {
+    if (this.openConnections.some((c) => c.id === conn.id)) await this.switchConnection(conn.id);
+    else await this.connect(conn);
+  }
+
+  /** Closes every open connection (saved connections are untouched). */
+  closeAll() {
+    const ids = [...this.sessions.values()];
+    if (this.sessionId && !ids.includes(this.sessionId)) ids.push(this.sessionId);
+    for (const c of this.openConnections) workspace.forget(c.id);
+    this.sessions.clear();
+    this.tableCache.clear();
+    this.openConnections = [];
+    this.sessionId = null;
+    this.sessionConnectionId = null;
+    this.schemaFor = null;
+    this.isConnected = false;
+    workspace.reset();
+    for (const sid of ids) void this.closeSessionId(sid);
   }
 
   /** Switches to another open connection without reconnecting (rail click, Ctrl+1…9). */
